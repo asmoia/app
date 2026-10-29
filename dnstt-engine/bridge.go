@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
@@ -18,23 +19,24 @@ import (
 const maxPacket = 4096
 
 type relay struct {
-	bal           *storm.Balancer
-	timeout       time.Duration
-	zone          string
-	sem           chan struct{}
-	mu            sync.Mutex
-	sends         map[string]int
-	successes     map[string]int
-	failures      map[string]int
-	cooldownUntil map[string]time.Time
-	candidates    []storm.Connection
-	adaptive      bool
-	activePaths   map[string]storm.Connection
-	scanMu        sync.Mutex
-	scanRunning   bool
-	scanDone      chan struct{}
-	scanReady     chan struct{}
-	scanOffset    int
+	exploreCounter atomic.Uint64
+	bal            *storm.Balancer
+	timeout        time.Duration
+	zone           string
+	sem            chan struct{}
+	mu             sync.Mutex
+	sends          map[string]int
+	successes      map[string]int
+	failures       map[string]int
+	cooldownUntil  map[string]time.Time
+	candidates     []storm.Connection
+	adaptive       bool
+	activePaths    map[string]storm.Connection
+	scanMu         sync.Mutex
+	scanRunning    bool
+	scanDone       chan struct{}
+	scanReady      chan struct{}
+	scanOffset     int
 }
 
 func newRelay(upstreams []string, zone string, timeout time.Duration) (*relay, error) {
@@ -48,7 +50,7 @@ func newRelay(upstreams []string, zone string, timeout time.Duration) (*relay, e
 	if err != nil {
 		return nil, fmt.Errorf("invalid zone: %w", err)
 	}
-	r := &relay{bal: storm.NewBalancer(storm.BalancingRoundRobin), timeout: timeout, zone: parsed.String(), sem: make(chan struct{}, 128), sends: map[string]int{}, successes: map[string]int{}, failures: map[string]int{}, cooldownUntil: map[string]time.Time{}}
+	r := &relay{bal: storm.NewBalancer(storm.BalancingLowestLatency), timeout: timeout, zone: parsed.String(), sem: make(chan struct{}, 128), sends: map[string]int{}, successes: map[string]int{}, failures: map[string]int{}, cooldownUntil: map[string]time.Time{}}
 	var conns []*storm.Connection
 	seen := map[string]bool{}
 	for _, address := range upstreams {
@@ -145,9 +147,7 @@ func (r *relay) exchange(packet []byte) ([]byte, error) {
 			return first, nil
 		}
 	}
-	// Select one primary per query. GetUniqueConnections(2) advances Storm's
-	// round-robin counter by two, which can pin the primary with two paths.
-	primary, ok := r.bal.GetBestConnection()
+	primary, ok := r.selectDNSPath()
 	if !ok {
 		return nil, errors.New("no resolver available")
 	}
@@ -157,6 +157,29 @@ func (r *relay) exchange(packet []byte) ([]byte, error) {
 		}
 	}
 	return r.exchangeHedged(packet, req, q, primary)
+}
+
+// Storm prefers the measured low-latency resolver. Reserve one in eight
+// queries for alternatives so their measurements do not go permanently stale.
+func (r *relay) selectDNSPath() (storm.Connection, bool) {
+	primary, ok := r.bal.GetBestConnection()
+	if !ok {
+		return primary, false
+	}
+	seq := r.exploreCounter.Add(1)
+	if seq%8 == 0 {
+		valid := r.bal.GetAllValidConnections()
+		alternatives := make([]storm.Connection, 0, len(valid))
+		for _, candidate := range valid {
+			if candidate.Key != primary.Key && !r.cooling(candidate.Key) {
+				alternatives = append(alternatives, candidate)
+			}
+		}
+		if len(alternatives) > 0 {
+			primary = alternatives[(seq/8-1)%uint64(len(alternatives))]
+		}
+	}
+	return primary, true
 }
 
 func (r *relay) serve(ctx context.Context, conn *net.UDPConn) error {
