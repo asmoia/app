@@ -28,6 +28,14 @@ type relay struct {
 	successes     map[string]int
 	failures      map[string]int
 	cooldownUntil map[string]time.Time
+	candidates    []storm.Connection
+	adaptive      bool
+	activePaths   map[string]storm.Connection
+	scanMu        sync.Mutex
+	scanRunning   bool
+	scanDone      chan struct{}
+	scanReady     chan struct{}
+	scanOffset    int
 }
 
 func newRelay(upstreams []string, zone string, timeout time.Duration) (*relay, error) {
@@ -61,7 +69,18 @@ func newRelay(upstreams []string, zone string, timeout time.Duration) (*relay, e
 		seen[key] = true
 		conns = append(conns, &storm.Connection{Key: key, Resolver: host, ResolverPort: addr.Port, IsValid: true})
 	}
-	r.bal.SetConnections(conns)
+	r.adaptive = len(conns) > 8
+	r.activePaths = make(map[string]storm.Connection)
+	for _, conn := range conns {
+		r.candidates = append(r.candidates, *conn)
+	}
+	if r.adaptive {
+		// Large candidate lists are not ready merely because a resolver answered
+		// ordinary DNS. Actual DNSTT traffic activates paths on the first query.
+		r.bal.SetConnections(nil)
+	} else {
+		r.bal.SetConnections(conns)
+	}
 	return r, nil
 }
 
@@ -91,6 +110,12 @@ func (r *relay) failed(key string) {
 	if r.failures[key] >= 3 {
 		shift := min(r.failures[key]-3, 5)
 		r.cooldownUntil[key] = time.Now().Add(time.Duration(1<<shift) * time.Second)
+		if r.adaptive {
+			if _, active := r.activePaths[key]; active {
+				delete(r.activePaths, key)
+				r.updateActiveLocked()
+			}
+		}
 	}
 }
 
@@ -111,6 +136,15 @@ func (r *relay) exchange(packet []byte) ([]byte, error) {
 	zone := r.zone
 	if name != zone && !strings.HasSuffix(name, "."+zone) {
 		return nil, errors.New("question outside allowed zone")
+	}
+	if r.adaptive && r.bal.ValidCount() == 0 {
+		first, err := r.discover(packet)
+		if err != nil {
+			return nil, err
+		}
+		if first != nil {
+			return first, nil
+		}
 	}
 	// Select one primary per query. GetUniqueConnections(2) advances Storm's
 	// round-robin counter by two, which can pin the primary with two paths.

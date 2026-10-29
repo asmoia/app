@@ -63,6 +63,8 @@ func scanOne(ctx context.Context, exe, dir string, cfg engineConfig, resolver st
 	cfg.ListenHost = "127.0.0.1"
 	// Scan is explicitly for the profile's primary zone, not an implicit pool.
 	cfg.Domains = nil
+	cfg.BootstrapResolvers = nil
+	cfg.ServerAddresses = nil
 	cfg.LocalUsername = ""
 	cfg.LocalPassword = ""
 	cfg.StartupTimeoutSec = 25

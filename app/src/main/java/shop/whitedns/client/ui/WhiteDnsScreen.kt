@@ -3709,7 +3709,9 @@ internal fun ConnectionProfilesSettings(
                     },
                     icon = Icons.Rounded.Speed,
                     contentDescription = WhiteDnsL10n.serverTestButton,
-                    enabled = connectionStatus == ConnectionStatus.CONNECTED && !serverTestState.isRunning,
+                    enabled = (connectionStatus == ConnectionStatus.CONNECTED ||
+                        (connectionStatus == ConnectionStatus.DISCONNECTED && DnsClientEngine.normalize(selectedProfile.engine) == DnsClientEngine.SlowDns)) &&
+                        !serverTestState.isRunning,
                     onClick = { onServerTestClick(null) },
                 ),
                 ProfileMenuAction(
@@ -3758,7 +3760,8 @@ internal fun ConnectionProfilesSettings(
             connectionStatus != ConnectionStatus.DISCONNECTED
         val canEdit = canManageProfiles
         val canDelete = canManageProfiles && !isActive
-        val canTest = connectionStatus == ConnectionStatus.CONNECTED &&
+        val canTest = (connectionStatus == ConnectionStatus.CONNECTED ||
+            (connectionStatus == ConnectionStatus.DISCONNECTED && DnsClientEngine.normalize(profile.engine) == DnsClientEngine.SlowDns)) &&
             !serverTestState.isRunning &&
             profile.customServerDomain.isNotBlank() &&
             profile.customServerEncryptionKey.isNotBlank()
@@ -5865,7 +5868,7 @@ private fun ConnectionProfileRow(
                         onClick = onUse,
                     ),
                     ProfileMenuAction(
-                        label = WhiteDnsL10n.serverTestSingleButton,
+                        label = if (DnsClientEngine.normalize(profile.engine) == DnsClientEngine.SlowDns) soarText("Test ping", "تست پینگ") else WhiteDnsL10n.serverTestSingleButton,
                         icon = Icons.Rounded.Speed,
                         contentDescription = WhiteDnsL10n.serverTestSingleButton,
                         enabled = canTest,
@@ -5897,13 +5900,13 @@ private fun ConnectionProfileRow(
         }
         if (serverTestResult != null && testRating != null) {
             Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
-            ServerTestInlineResult(rating = testRating)
+            ServerTestInlineResult(rating = testRating, result = serverTestResult)
         }
     }
 }
 
 @Composable
-private fun ServerTestInlineResult(rating: ServerTestRatingDisplay) {
+private fun ServerTestInlineResult(rating: ServerTestRatingDisplay, result: ServerTestResult) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -5930,8 +5933,12 @@ private fun ServerTestInlineResult(rating: ServerTestRatingDisplay) {
         }
         Text(
             modifier = Modifier.weight(1f),
-            text = WhiteDnsL10n.serverTestTitle,
-            maxLines = 1,
+            text = when {
+                result.status == ServerTestStatus.Ready && result.pingMillis != null -> "Ping (SOCKS): ${result.pingMillis} ms"
+                result.status == ServerTestStatus.Failed && result.message.isNotBlank() -> result.message
+                else -> WhiteDnsL10n.serverTestTitle
+            },
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodyMedium.copy(
                 fontSize = 12.sp,

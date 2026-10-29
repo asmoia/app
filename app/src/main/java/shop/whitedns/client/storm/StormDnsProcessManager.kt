@@ -52,6 +52,7 @@ class StormDnsProcessManager(
                 context = context,
                 profile = serverProfile,
                 settings = settings,
+                systemResolvers = currentNetworkResolvers(),
             ) else StormDnsConfigRenderer.renderClientToml(
                 serverProfile = serverProfile,
                 settings = settings,

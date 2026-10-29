@@ -24,21 +24,23 @@ import (
 )
 
 type engineConfig struct {
-	Domain            string   `json:"domain"`
-	Domains           []string `json:"domains"`
-	PoolSize          int      `json:"poolSize"`
-	SkipPreflight     bool     `json:"skipPreflight"`
-	PublicKey         string   `json:"publicKey"`
-	Report            string   `json:"report"`
-	ClientBinary      string   `json:"clientBinary"`
-	Username          string   `json:"username"`
-	Password          string   `json:"password"`
-	ListenHost        string   `json:"listenHost"`
-	ListenPort        int      `json:"listenPort"`
-	LocalUsername     string   `json:"localUsername"`
-	LocalPassword     string   `json:"localPassword"`
-	VerifyURL         string   `json:"verifyUrl"`
-	StartupTimeoutSec int      `json:"startupTimeoutSec"`
+	Domain             string            `json:"domain"`
+	Domains            []string          `json:"domains"`
+	PoolSize           int               `json:"poolSize"`
+	SkipPreflight      bool              `json:"skipPreflight"`
+	BootstrapResolvers []string          `json:"bootstrapResolvers"`
+	ServerAddresses    map[string]string `json:"serverAddresses"`
+	PublicKey          string            `json:"publicKey"`
+	Report             string            `json:"report"`
+	ClientBinary       string            `json:"clientBinary"`
+	Username           string            `json:"username"`
+	Password           string            `json:"password"`
+	ListenHost         string            `json:"listenHost"`
+	ListenPort         int               `json:"listenPort"`
+	LocalUsername      string            `json:"localUsername"`
+	LocalPassword      string            `json:"localPassword"`
+	VerifyURL          string            `json:"verifyUrl"`
+	StartupTimeoutSec  int               `json:"startupTimeoutSec"`
 }
 
 func (c engineConfig) validate() error {
@@ -172,14 +174,44 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// Explicit bootstrap paths are included only when Android selected its default
+// resolver profile. A custom resolver list and authenticated scanner stay exact.
+func prioritizedResolvers(cfg engineConfig, addresses []string) []string {
+	if len(cfg.BootstrapResolvers) == 0 {
+		return addresses
+	}
+	out := make([]string, 0, len(addresses)+len(cfg.BootstrapResolvers)+1)
+	seen := make(map[string]bool, len(addresses))
+	add := func(a string) {
+		if !seen[a] {
+			seen[a] = true
+			out = append(out, a)
+		}
+	}
+	candidates := append([]string(nil), cfg.BootstrapResolvers...)
+	if direct := cfg.ServerAddresses[cfg.Domain]; direct != "" {
+		candidates = append(candidates, direct)
+	}
+	for _, candidate := range candidates {
+		if parsed, err := expandResolvers(candidate, 1); err == nil && len(parsed) == 1 {
+			add(parsed[0])
+		}
+	}
+	for _, a := range addresses {
+		add(a)
+	}
+	return out
+}
+
 func runEngine(ctx context.Context, cfg engineConfig, addresses []string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	if len(addresses) > 8 && !cfg.SkipPreflight {
-		fmt.Println("WD_PROGRESS phase=selecting percent=10")
-		addresses = preflightResolvers(ctx, addresses, 6*time.Second)
+	addresses = prioritizedResolvers(cfg, addresses)
+	if len(addresses) > 8 {
+		fmt.Printf("SLOWDNS_PATH discovering_tunnel_resolvers candidates=%d\n", len(addresses))
 	}
-	relay, err := newRelay(addresses, cfg.Domain, 1200*time.Millisecond)
+	relay, err := newRelay(addresses, cfg.Domain, 1800*time.Millisecond)
 	if err != nil {
 		return err
 	}
@@ -233,8 +265,9 @@ func runEngine(ctx context.Context, cfg engineConfig, addresses []string) error 
 		timeout = 90 * time.Second
 	}
 	deadline := time.Now().Add(timeout)
-	probeCtx, probeCancel := context.WithCancel(ctx)
+	probeCtx, probeCancel := context.WithDeadline(ctx, deadline)
 	defer probeCancel()
+	attempt := 0
 	for {
 		if time.Now().After(deadline) {
 			return errors.New("authenticated tunnel verification timed out")
@@ -250,8 +283,17 @@ func runEngine(ctx context.Context, cfg engineConfig, addresses []string) error 
 			return nil
 		default:
 		}
+		attempt++
 		if e := verifyTunnel(probeCtx, listen.Addr().String(), cfg.LocalUsername, cfg.LocalPassword, verifyURL); e == nil {
 			break
+		} else {
+			fmt.Printf("SLOWDNS_PROBE attempt=%d error=%v\n", attempt, e)
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		if probeCtx.Err() != nil {
+			return errors.New("authenticated tunnel verification timed out")
 		}
 		select {
 		case <-ctx.Done():

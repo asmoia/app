@@ -1204,6 +1204,7 @@ class WhiteDnsViewModel(
         manager: StormDnsProcessManager,
         listenPort: Int,
         startupFailure: AtomicReference<String?>,
+        tunnelReady: () -> Boolean = { true },
     ): Boolean {
         val deadline = System.currentTimeMillis() + AutoTuneReadyTimeoutMillis
         while (System.currentTimeMillis() < deadline) {
@@ -1213,7 +1214,7 @@ class WhiteDnsViewModel(
             if (!manager.isRunning()) {
                 return false
             }
-            if (canConnectToLocalPort(listenPort)) {
+            if (tunnelReady() && canConnectToLocalPort(listenPort)) {
                 return true
             }
             delay(AutoTuneSignalPollMillis)
@@ -1325,6 +1326,7 @@ class WhiteDnsViewModel(
         val normalized = line.lowercase()
         return when {
             line.startsWith("SOAR_ERROR:") -> line.removePrefix("SOAR_ERROR:").trim()
+            line.contains("SLOWDNS_ERROR:") -> line.substringAfter("SLOWDNS_ERROR:").trim()
             "no valid connections found after mtu testing" in normalized ||
                 "mtu tests failed: no valid connections" in normalized ||
                 "no valid connections after mtu testing" in normalized ->
@@ -1338,16 +1340,17 @@ class WhiteDnsViewModel(
     }
 
     fun beginServerTest(serverProfileId: String? = null) {
-        if (
-            uiState.connectionStatus != ConnectionStatus.CONNECTED ||
-            uiState.serverTestState.isRunning
-        ) {
-            return
-        }
+        val baseSettings = uiState.settings.syncSelectedConnectionProfileFields()
+        val testProfileId = serverProfileId ?: baseSettings.selectedConnectionProfile().id
+        val requestedProfile = baseSettings.normalizedConnectionProfiles().firstOrNull { it.id == testProfileId }
+        val offlineSlowDns = uiState.connectionStatus == ConnectionStatus.DISCONNECTED &&
+            requestedProfile != null && DnsClientEngine.normalize(requestedProfile.engine) == DnsClientEngine.SlowDns
+        if ((uiState.connectionStatus != ConnectionStatus.CONNECTED && !offlineSlowDns) || uiState.serverTestState.isRunning) return
 
         serverTestJob?.cancel()
-        val baseSettings = uiState.settings.syncSelectedConnectionProfileFields()
-        val serverProfiles = buildServerTestProfiles(baseSettings, serverProfileId)
+        // While disconnected, test one selected SlowDNS profile instead of
+        // launching every saved server concurrently.
+        val serverProfiles = buildServerTestProfiles(baseSettings, if (offlineSlowDns) testProfileId else serverProfileId)
         val resolverEntries = connectedServerTestResolvers(baseSettings)
 
         if (serverProfiles.isEmpty()) {
@@ -1378,7 +1381,7 @@ class WhiteDnsViewModel(
                 ServerTestPlan(
                     serverProfile = serverProfile,
                     settings = runtimeBaseSettings.copy(
-                        selectedResolverProfileId = "",
+                        selectedResolverProfileId = if (offlineSlowDns) baseSettings.selectedResolverProfileId else "",
                         resolverText = resolverText,
                         connectionMode = WhiteDnsRuntimeStateStore.ModeProxy,
                         listenIp = WhiteDnsRuntimeProxy.ListenIp,
@@ -1406,7 +1409,7 @@ class WhiteDnsViewModel(
                 plan.serverProfile.id to StormDnsProcessManager(appContext)
             }
             setServerTestManagers(managers.values.toList())
-            val startedMessage = "Server Test: testing ${plans.size} servers with ${resolverEntries.size} connected resolvers"
+            val startedMessage = "Server Test: testing ${plans.size} servers with ${resolverEntries.size} resolver candidates"
             appendLog(startedMessage)
             uiState = uiState.copy(
                 serverTestState = ServerTestState(
@@ -1448,7 +1451,7 @@ class WhiteDnsViewModel(
                     }
                     if (
                         uiState.serverTestState.isRunning &&
-                        uiState.connectionStatus == ConnectionStatus.CONNECTED
+                        (uiState.connectionStatus == ConnectionStatus.CONNECTED || offlineSlowDns)
                     ) {
                         val results = uiState.serverTestState.results
                         uiState = uiState.copy(
@@ -1469,6 +1472,9 @@ class WhiteDnsViewModel(
         manager: StormDnsProcessManager,
     ): ServerTestStartup {
         val startupFailure = AtomicReference<String?>(null)
+        val tunnelReady = java.util.concurrent.atomic.AtomicBoolean(
+            DnsClientEngine.normalize(plan.serverProfile.engine) != DnsClientEngine.SlowDns,
+        )
         return try {
             withContext(Dispatchers.Main.immediate) {
                 updateServerTestResultOnMain(
@@ -1479,6 +1485,7 @@ class WhiteDnsViewModel(
                 )
             }
             manager.start(plan.serverProfile, plan.settings) { line ->
+                if (parseStormDnsConnectionProgressLine(line)?.phase == "connected") tunnelReady.set(true)
                 detectStormDnsStartupFailure(line)?.let { failure ->
                     startupFailure.compareAndSet(null, failure)
                 }
@@ -1487,6 +1494,7 @@ class WhiteDnsViewModel(
                 manager = manager,
                 listenPort = plan.settings.resolve().listenPort,
                 startupFailure = startupFailure,
+                tunnelReady = { tunnelReady.get() },
             )
             if (!ready) {
                 val failedResult = plan.result.copy(
@@ -1507,7 +1515,7 @@ class WhiteDnsViewModel(
                 updateServerTestResultOnMain(
                     plan.result.copy(
                         status = ServerTestStatus.Measuring,
-                        message = "Measuring speed",
+                        message = if (DnsClientEngine.normalize(plan.serverProfile.engine) == DnsClientEngine.SlowDns) "Measuring ping" else "Measuring speed",
                     ),
                 )
             }
@@ -1540,18 +1548,20 @@ class WhiteDnsViewModel(
             updateServerTestResultOnMain(
                 plan.result.copy(
                     status = ServerTestStatus.Measuring,
-                    message = "Measuring speed",
+                    message = if (DnsClientEngine.normalize(plan.serverProfile.engine) == DnsClientEngine.SlowDns) "Measuring ping" else "Measuring speed",
                 ),
             )
         }
-        val probeResult = WhiteDnsTrafficWarmup.measureDownloadThroughput(plan.settings.resolve())
+        val slowDns = DnsClientEngine.normalize(plan.serverProfile.engine) == DnsClientEngine.SlowDns
+        val probeResult = if (slowDns) null else WhiteDnsTrafficWarmup.measureDownloadThroughput(plan.settings.resolve())
         val speed = probeResult?.bytesPerSecond ?: 0L
-        val pingMillis = probeResult?.latencyMillis
+        val pingMillis = if (slowDns) WhiteDnsTrafficWarmup.measureSocksConnectLatency(plan.settings.resolve()) else probeResult?.latencyMillis
+        val measured = pingMillis != null || probeResult != null
         val result = plan.result.copy(
-            status = ServerTestStatus.Ready,
+            status = if (measured) ServerTestStatus.Ready else ServerTestStatus.Failed,
             speedBytesPerSecond = speed,
             pingMillis = pingMillis,
-            message = if (speed > 0L) "Measured" else "No speed result",
+            message = if (measured) "Measured (SOCKS connect latency)" else "No response through tunnel",
         )
         withContext(Dispatchers.Main.immediate) {
             updateServerTestResultOnMain(result)

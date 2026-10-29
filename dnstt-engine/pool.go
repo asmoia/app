@@ -149,10 +149,6 @@ func runPool(ctx context.Context, cfg engineConfig, resolvers []string) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	if len(resolvers) > 8 {
-		fmt.Println("WD_PROGRESS phase=selecting percent=10")
-		resolvers = preflightResolvers(ctx, resolvers, 6*time.Second)
-	}
 	dir, err := os.MkdirTemp(".", ".slowdns-pool-")
 	if err != nil {
 		return err
@@ -182,7 +178,7 @@ func runPool(ctx context.Context, cfg engineConfig, resolvers []string) error {
 	fmt.Println("WD_PROGRESS phase=authenticating percent=15")
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-	startup := time.Now().Add(100 * time.Second)
+	startup := time.Now().Add(65 * time.Second)
 	var wasReady bool
 	var lastReady time.Time
 	for {
@@ -226,7 +222,7 @@ func poolSlot(ctx context.Context, p *tunnelPool, exe, dir string, slot, stride 
 		childCfg.Domains = nil
 		childCfg.ListenHost = "127.0.0.1"
 		childCfg.ListenPort = port
-		childCfg.StartupTimeoutSec = 35
+		childCfg.StartupTimeoutSec = 27
 		childCfg.SkipPreflight = true
 		data, err := json.Marshal(childCfg)
 		if err != nil {
@@ -252,7 +248,8 @@ func poolSlot(ctx context.Context, p *tunnelPool, exe, dir string, slot, stride 
 			}
 		}
 		var ready atomic.Bool
-		timer := time.AfterFunc(45*time.Second, func() {
+		fmt.Printf("SLOWDNS_SERVER trying=%s\n", zone)
+		timer := time.AfterFunc(32*time.Second, func() {
 			if !ready.Load() {
 				_ = cmd.Process.Kill()
 			}
@@ -265,6 +262,10 @@ func poolSlot(ctx context.Context, p *tunnelPool, exe, dir string, slot, stride 
 				timer.Stop()
 				count := p.set(slot, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 				fmt.Printf("SLOWDNS_POOL ready=%d server=%s\n", count, zone)
+			} else if strings.HasPrefix(scanner.Text(), "SLOWDNS_PATH ") || strings.HasPrefix(scanner.Text(), "SLOWDNS_PROBE ") {
+				fmt.Printf("SLOWDNS_SERVER server=%s %s\n", zone, scanner.Text())
+			} else if _, reason, ok := strings.Cut(scanner.Text(), "SLOWDNS_ERROR:"); ok {
+				fmt.Printf("SLOWDNS_SERVER server=%s failed=%s\n", zone, strings.TrimSpace(reason))
 			}
 		}
 		timer.Stop()

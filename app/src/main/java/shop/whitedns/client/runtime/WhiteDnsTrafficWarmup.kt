@@ -33,6 +33,22 @@ object WhiteDnsTrafficWarmup {
         return runSocksHttpProbe(settings)
     }
 
+    // TCP/SOCKS connect time through the tunnel, not ICMP ping.
+    fun measureSocksConnectLatency(settings: ResolvedWhiteDnsSettings): Long? = runCatching {
+        Socket().use { socket ->
+            val start = System.nanoTime()
+            socket.soTimeout = 20_000
+            socket.tcpNoDelay = true
+            socket.connect(InetSocketAddress(localProxyHost(settings.listenIp), settings.listenPort), SocketTimeoutMillis)
+            val input = socket.getInputStream()
+            val output = socket.getOutputStream()
+            if (!negotiateSocks(input, output, settings) || !connectToTarget(input, output, "example.com", 443)) {
+                return@use null
+            }
+            ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
+        }
+    }.getOrNull()
+
     fun measureDownloadThroughput(settings: ResolvedWhiteDnsSettings): WhiteDnsThroughputProbeResult? {
         return listOf(ThroughputProbeTarget, FallbackProbeTarget)
             .asSequence()
