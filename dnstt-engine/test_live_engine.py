@@ -28,12 +28,18 @@ def main():
     parser.add_argument('--server-index', type=int, default=0)
     args = parser.parse_args()
     source = json.load(open(args.source, encoding='utf-8'))
-    server = source['servers']['list'][args.server_index]
-    auth = source['far_end']['socks5']['auth']
+    if isinstance(source.get('servers'), list):
+        server = source['servers'][args.server_index]
+        auth = {'username': source['username'], 'password': source['password']}
+        pubkey, report = 'prince', source['report']
+    else:
+        server = source['servers']['list'][args.server_index]
+        auth = source['far_end']['socks5']['auth']
+        pubkey, report = source['engine']['pubkey_label'], source['engine']['report_string']
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0)); port = listener.getsockname()[1]
-    cfg = {'domain': server['zone'], 'publicKey': source['engine']['pubkey_label'],
-           'report': source['engine']['report_string'], 'clientBinary': os.path.abspath(args.client),
+    cfg = {'domain': server['zone'], 'publicKey': pubkey,
+           'report': report, 'clientBinary': os.path.abspath(args.client),
            'username': auth['username'], 'password': auth['password'], 'listenHost': '127.0.0.1',
            'listenPort': port, 'verifyUrl': 'https://example.com/', 'startupTimeoutSec': 90}
     with tempfile.TemporaryDirectory(prefix='whitedns-slowdns-') as tmp:

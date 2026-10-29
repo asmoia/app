@@ -45,7 +45,6 @@ func (r *relay) discover(packet []byte) ([]byte, error) {
 	// Cap each sweep; next attempt resumes farther into the original list.
 	count := min(512, len(r.candidates))
 	start := r.scanOffset
-	r.scanOffset = (start + count) % len(r.candidates)
 	r.scanMu.Unlock()
 	go r.scanTunnelPacket(bytes.Clone(packet), start, count, first, ready, done)
 	select {
@@ -64,7 +63,21 @@ func (r *relay) discover(packet []byte) ([]byte, error) {
 	}
 }
 func (r *relay) scanTunnelPacket(packet []byte, start, count int, first chan []byte, ready, done chan struct{}) {
-	defer func() { r.scanMu.Lock(); r.scanRunning = false; close(done); r.scanMu.Unlock() }()
+	priority := min(8, len(r.candidates))
+	// Every sweep retries the preferred network/public resolvers. Only advance
+	// the remaining-list cursor for jobs actually sent, not the full cap when
+	// a fast successful scan is cancelled early.
+	if start < priority || start >= len(r.candidates) {
+		start = priority
+	}
+	nextOffset := start
+	defer func() {
+		r.scanMu.Lock()
+		r.scanOffset = nextOffset
+		r.scanRunning = false
+		close(done)
+		r.scanMu.Unlock()
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	jobs := make(chan storm.Connection)
@@ -106,8 +119,15 @@ func (r *relay) scanTunnelPacket(packet []byte, start, count int, first chan []b
 		}()
 	}
 	for i := 0; i < count; i++ {
+		idx := i
+		if i >= priority {
+			idx = priority + (start-priority+i-priority)%(len(r.candidates)-priority)
+		}
 		select {
-		case jobs <- r.candidates[(start+i)%len(r.candidates)]:
+		case jobs <- r.candidates[idx]:
+			if i >= priority {
+				nextOffset = priority + (idx-priority+1)%(len(r.candidates)-priority)
+			}
 		case <-ctx.Done():
 			close(jobs)
 			wg.Wait()

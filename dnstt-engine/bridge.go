@@ -2,7 +2,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -157,50 +156,7 @@ func (r *relay) exchange(packet []byte) ([]byte, error) {
 			primary = alternative
 		}
 	}
-	for i := 0; i < 2; i++ {
-		c := primary
-		if i == 1 {
-			// Only advance the balancer for fallback after the primary fails.
-			var found bool
-			c, found = r.bal.GetBestConnectionExcluding(primary.Key)
-			if !found {
-				break
-			}
-		}
-		r.mu.Lock()
-		r.sends[c.Key]++
-		r.mu.Unlock()
-		r.bal.ReportSend(c.Key)
-		started := time.Now()
-		conn, err := net.DialTimeout("udp", c.Key, r.timeout)
-		if err != nil {
-			r.failed(c.Key)
-			continue
-		}
-		_ = conn.SetDeadline(time.Now().Add(r.timeout))
-		_, err = conn.Write(packet)
-		response := make([]byte, maxPacket)
-		var n int
-		if err == nil {
-			n, err = conn.Read(response)
-		}
-		_ = conn.Close()
-		if err != nil {
-			r.failed(c.Key)
-			continue
-		}
-		response = response[:n]
-		h, respQ, err := question(response, true)
-		var parsed dnsmessage.Message
-		if err != nil || parsed.Unpack(response) != nil || h.ID != req.ID || h.RCode != dnsmessage.RCodeSuccess || h.Truncated || !strings.EqualFold(respQ.Name.String(), q.Name.String()) || respQ.Type != q.Type || respQ.Class != q.Class {
-			r.failed(c.Key)
-			continue
-		}
-		r.bal.ReportSuccess(c.Key, time.Since(started))
-		r.succeeded(c.Key)
-		return bytes.Clone(response), nil
-	}
-	return nil, errors.New("no valid upstream response")
+	return r.exchangeHedged(packet, req, q, primary)
 }
 
 func (r *relay) serve(ctx context.Context, conn *net.UDPConn) error {

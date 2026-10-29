@@ -35,10 +35,16 @@ def main():
     p=argparse.ArgumentParser()
     for key in ('source','engine','client'): p.add_argument('--'+key,required=True)
     p.add_argument('--fault', action='store_true', help='kill one child after both sessions are ready (Linux only)')
-    a=p.parse_args();x=json.load(open(a.source,encoding='utf-8')); auth=x['far_end']['socks5']['auth']
-    zones=[x['servers']['list'][0]['zone'],x['servers']['list'][19]['zone']]
+    a=p.parse_args();x=json.load(open(a.source,encoding='utf-8'))
+    if isinstance(x.get('servers'), list):
+        auth={'username':x['username'],'password':x['password']}
+        servers=x['servers']; pubkey='prince'; report=x['report']
+    else:
+        auth=x['far_end']['socks5']['auth']; servers=x['servers']['list']
+        pubkey=x['engine']['pubkey_label']; report=x['engine']['report_string']
+    zones=[servers[0]['zone'],servers[19]['zone']]
     with socket.socket() as sock: sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
-    cfg={'domain':zones[0],'domains':zones,'poolSize':2,'publicKey':x['engine']['pubkey_label'],'report':x['engine']['report_string'],
+    cfg={'domain':zones[0],'domains':zones,'poolSize':2,'publicKey':pubkey,'report':report,
          'clientBinary':os.path.abspath(a.client),'username':auth['username'],'password':auth['password'],
          'listenHost':'127.0.0.1','listenPort':port,'verifyUrl':'https://example.com/','startupTimeoutSec':90}
     with tempfile.TemporaryDirectory(prefix='whitedns-pool-') as d, tempfile.TemporaryFile(mode='w+t') as log:

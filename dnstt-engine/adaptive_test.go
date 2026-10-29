@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"golang.org/x/net/dns/dnsmessage"
 	"net"
+	storm "stormdns-go/internal/client"
 	"testing"
 	"time"
 )
@@ -68,6 +69,47 @@ func TestAdaptiveOnlyActivatesTunnelAnswers(t *testing.T) {
 		t.Fatalf("bad=%v good=%v", badActive, goodActive)
 	}
 }
+func TestAdaptiveRescanRechecksPreferredAndDoesNotSkipUndispatched(t *testing.T) {
+	addrs := []string{}
+	for i := 0; i < 4; i++ {
+		addrs = append(addrs, tunnelResolver(t, true))
+	}
+	for i := 0; i < 28; i++ {
+		addrs = append(addrs, fake(t, false, false))
+	}
+	for i := 0; i < 1200; i++ {
+		addrs = append(addrs, fmt.Sprintf("127.0.0.1:%d", 30000+i))
+	}
+	r, err := newRelay(addrs, "test.invalid", 100*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.exchange(query(t, "first.test.invalid.")); err != nil {
+		t.Fatal(err)
+	}
+	r.scanMu.Lock()
+	done := r.scanDone
+	r.scanMu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("scan did not stop")
+	}
+	r.scanMu.Lock()
+	offset := r.scanOffset
+	r.scanMu.Unlock()
+	if offset >= 200 {
+		t.Fatalf("cursor jumped over unsent candidates: %d", offset)
+	}
+	r.mu.Lock()
+	r.activePaths = map[string]storm.Connection{}
+	r.updateActiveLocked()
+	r.mu.Unlock()
+	if _, err = r.exchange(query(t, "retry.test.invalid.")); err != nil {
+		t.Fatal("preferred paths were not retried:", err)
+	}
+}
+
 func TestCustomResolversRemainExact(t *testing.T) {
 	orig := []string{"1.2.3.4:53"}
 	out := prioritizedResolvers(engineConfig{Domain: "test.invalid", ServerAddresses: map[string]string{"test.invalid": "5.6.7.8:53"}}, orig)

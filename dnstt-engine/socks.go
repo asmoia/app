@@ -83,21 +83,21 @@ func readBytes(c net.Conn, n int) ([]byte, error) {
 	return buf, err
 }
 func equal(a, b []byte) bool { return len(a) == len(b) && subtle.ConstantTimeCompare(a, b) == 1 }
-func (s *socksRelay) handle(c net.Conn) error {
+func acceptLocalSocks(c net.Conn, localUser, localPass string) ([]byte, error) {
 	_ = c.SetDeadline(time.Now().Add(45 * time.Second))
 	h, err := readBytes(c, 2)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if h[0] != 5 || h[1] == 0 {
-		return errors.New("invalid SOCKS greeting")
+		return nil, errors.New("invalid SOCKS greeting")
 	}
 	methods, err := readBytes(c, int(h[1]))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	method := byte(0)
-	if s.localUser != "" {
+	if localUser != "" {
 		method = 2
 	}
 	present := false
@@ -108,42 +108,50 @@ func (s *socksRelay) handle(c net.Conn) error {
 	}
 	if !present {
 		_, _ = c.Write([]byte{5, 255})
-		return errors.New("no supported local auth")
+		return nil, errors.New("no supported local auth")
 	}
 	if _, err = c.Write([]byte{5, method}); err != nil {
-		return err
+		return nil, err
 	}
 	if method == 2 {
 		hdr, e := readBytes(c, 2)
 		if e != nil {
-			return e
+			return nil, e
 		}
 		if hdr[0] != 1 || hdr[1] == 0 {
-			return errors.New("bad local auth")
+			return nil, errors.New("bad local auth")
 		}
 		u, e := readBytes(c, int(hdr[1]))
 		if e != nil {
-			return e
+			return nil, e
 		}
 		plen, e := readBytes(c, 1)
 		if e != nil {
-			return e
+			return nil, e
 		}
 		p, e := readBytes(c, int(plen[0]))
 		if e != nil {
-			return e
+			return nil, e
 		}
-		ok := equal(u, []byte(s.localUser)) && equal(p, []byte(s.localPass))
+		ok := equal(u, []byte(localUser)) && equal(p, []byte(localPass))
 		reply := byte(1)
 		if ok {
 			reply = 0
 		}
 		_, _ = c.Write([]byte{1, reply})
 		if !ok {
-			return errors.New("local auth refused")
+			return nil, errors.New("local auth refused")
 		}
 	}
 	request, err := readSocksRequest(c)
+	if err != nil {
+		return nil, err
+	}
+	return request, nil
+}
+
+func (s *socksRelay) handle(c net.Conn) error {
+	request, err := acceptLocalSocks(c, s.localUser, s.localPass)
 	if err != nil {
 		return err
 	}
