@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -21,6 +22,8 @@ type socksRelay struct {
 	mu                     sync.Mutex
 	open                   map[net.Conn]struct{}
 	wg                     sync.WaitGroup
+	payloadUp              atomic.Uint64
+	payloadDown            atomic.Uint64
 }
 
 func newSocksRelay(upstream, user, pass, localUser, localPass string) *socksRelay {
@@ -183,19 +186,31 @@ func (s *socksRelay) handle(c net.Conn) error {
 	_ = c.SetDeadline(time.Time{})
 	_ = upstream.SetDeadline(time.Time{})
 	done := make(chan struct{}, 2)
-	pipe := func(dst, src net.Conn) {
-		_, _ = io.Copy(dst, src)
+	pipe := func(dst, src net.Conn, counter *atomic.Uint64) {
+		_, _ = io.Copy(countingWriter{dst, counter}, src)
 		if tcp, ok := dst.(*net.TCPConn); ok {
 			_ = tcp.CloseWrite()
 		}
 		done <- struct{}{}
 	}
-	go pipe(upstream, c)
-	go pipe(c, upstream)
+	go pipe(upstream, c, &s.payloadUp)
+	go pipe(c, upstream, &s.payloadDown)
 	<-done
 	<-done
 	return nil
 }
+
+type countingWriter struct {
+	writer  io.Writer
+	counter *atomic.Uint64
+}
+
+func (w countingWriter) Write(p []byte) (int, error) {
+	n, err := w.writer.Write(p)
+	w.counter.Add(uint64(n))
+	return n, err
+}
+
 func readSocksRequest(c net.Conn) ([]byte, error) {
 	h, e := readBytes(c, 4)
 	if e != nil {

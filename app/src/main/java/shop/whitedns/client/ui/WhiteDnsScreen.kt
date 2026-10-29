@@ -7859,7 +7859,10 @@ private fun ResolverRuntimeDialog(
 private fun LiveSpeedStrip(
     stats: ConnectionStats,
 ) {
-    val labels = listOf(WhiteDnsL10n.speedDown, WhiteDnsL10n.speedUp, WhiteDnsL10n.speedTotalUsage)
+    val totalLabel = if (stats.usageMayIncludeLocalTraffic) {
+        soarText("App traffic*", "ترافیک برنامه*")
+    } else WhiteDnsL10n.speedTotalUsage
+    val labels = listOf(WhiteDnsL10n.speedDown, WhiteDnsL10n.speedUp, totalLabel)
     val values = listOf(formatDataSpeed(stats.downloadSpeedBytesPerSecond),
         formatDataSpeed(stats.uploadSpeedBytesPerSecond), formatDataSize(stats.totalDataUsageBytes))
     val measurer = rememberTextMeasurer()
@@ -10337,6 +10340,17 @@ private fun HomeTrafficSummary(
         modifier = Modifier.fillMaxWidth().bringIntoViewRequester(requester),
     ) {
         LiveSpeedStrip(if (status == ConnectionStatus.DISCONNECTED) ConnectionStats() else stats)
+        if (status != ConnectionStatus.DISCONNECTED && stats.usageMayIncludeLocalTraffic) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                soarText(
+                    "* App traffic may include local connections and is not necessarily carrier-billed usage.",
+                    "* ترافیک برنامه ممکن است ارتباط داخلی را هم شامل شود و الزاماً برابر مصرف اپراتور نیست.",
+                ),
+                color = WhiteDnsPalette.Description,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
         if (status == ConnectionStatus.DISCONNECTED && latestEvent != null) {
             Spacer(Modifier.height(12.dp))
             Text(latestEvent.take(500), color = WhiteDnsPalette.Description,

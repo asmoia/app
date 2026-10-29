@@ -170,11 +170,15 @@ func (r *relay) tunnelProbe(ctx context.Context, address string, packet []byte) 
 	if _, err = conn.Write(packet); err != nil {
 		return nil, err
 	}
+	r.dnsUpBytes.Add(uint64(len(packet)))
+	r.dnsUpPackets.Add(1)
 	buf := make([]byte, maxPacket)
 	n, err := conn.Read(buf)
 	if err != nil {
 		return nil, err
 	}
+	r.dnsDownBytes.Add(uint64(n))
+	r.dnsDownPackets.Add(1)
 	reply := buf[:n]
 	hdr, rq, err := question(reply, true)
 	var parsed dnsmessage.Message

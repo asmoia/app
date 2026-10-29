@@ -95,4 +95,4 @@ jobs:
         run: |
           set -euo pipefail
           tag="build-${GITHUB_RUN_NUMBER}"
-          gh release create "$tag" output/* --target "$GITHUB_SHA" --title "$tag" --notes ''
+          gh release create "$tag" output/* --target "$GITHUB_SHA" --prerelease --title "$tag (experimental)" --notes 'Experimental diagnostic build; not verified on a physical Android device. Auto uses less frequent idle health checks, which may delay idle fault detection. The app UID traffic counter may include local traffic and is not carrier-billed usage. DNS metrics are partial, not a billing meter. Delivery of late DNS responses, reliability under loss, battery impact and actual data usage require further device testing. Existing streams may disconnect during server replacement. Test on unmetered Wi-Fi; no claim is made that excess data consumption or stalls are fixed.'

@@ -19,6 +19,10 @@ import (
 const maxPacket = 4096
 
 type relay struct {
+	dnsUpBytes     atomic.Uint64
+	dnsDownBytes   atomic.Uint64
+	dnsUpPackets   atomic.Uint64
+	dnsDownPackets atomic.Uint64
 	exploreCounter atomic.Uint64
 	bal            *storm.Balancer
 	timeout        time.Duration
@@ -129,34 +133,47 @@ func (r *relay) succeeded(key string) {
 }
 
 func (r *relay) exchange(packet []byte) ([]byte, error) {
+	var first []byte
+	err := r.exchangeAll(packet, func(reply []byte) {
+		if first == nil {
+			first = reply
+		}
+	})
+	return first, err
+}
+
+// A repeated DNS query can elicit different tunnel payloads. Deliver each
+// valid response to the local DNSTT client instead of discarding the late one.
+func (r *relay) exchangeAll(packet []byte, deliver func([]byte)) error {
 	req, q, err := question(packet, false)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	name := strings.ToLower(q.Name.String())
 	zone := r.zone
 	if name != zone && !strings.HasSuffix(name, "."+zone) {
-		return nil, errors.New("question outside allowed zone")
+		return errors.New("question outside allowed zone")
 	}
 	if r.adaptive && r.bal.ValidCount() == 0 {
 		first, err := r.discover(packet)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if first != nil {
-			return first, nil
+			deliver(first)
+			return nil
 		}
 	}
 	primary, ok := r.selectDNSPath()
 	if !ok {
-		return nil, errors.New("no resolver available")
+		return errors.New("no resolver available")
 	}
 	if r.cooling(primary.Key) {
 		if alternative, found := r.bal.GetBestConnectionExcluding(primary.Key); found && !r.cooling(alternative.Key) {
 			primary = alternative
 		}
 	}
-	return r.exchangeHedged(packet, req, q, primary)
+	return r.exchangeHedged(packet, req, q, primary, deliver)
 }
 
 // Storm prefers the measured low-latency resolver. Reserve one in eight
@@ -207,10 +224,9 @@ func (r *relay) serve(ctx context.Context, conn *net.UDPConn) error {
 		go func(p []byte, peer *net.UDPAddr) {
 			defer workers.Done()
 			defer func() { <-r.sem }()
-			reply, err := r.exchange(p)
-			if err == nil {
+			_ = r.exchangeAll(p, func(reply []byte) {
 				_, _ = conn.WriteToUDP(reply, peer)
-			}
+			})
 		}(data[:n], from)
 	}
 }

@@ -17,9 +17,11 @@ type queryResult struct {
 	err   error
 }
 
-// One delayed duplicate is allowed for a slow/lost query. This avoids waiting
-// the full timeout before trying another path; max 2 requests per DNS packet.
-func (r *relay) exchangeHedged(packet []byte, req dnsmessage.Header, q dnsmessage.Question, primary storm.Connection) ([]byte, error) {
+// One delayed duplicate is allowed for a slow/lost query. Unlike ordinary DNS,
+// repeated DNSTT questions may have different downstream data, so every valid
+// reply is delivered; otherwise useful tunnel data can be discarded.
+// At most two upstream requests and r.timeout of additional waiting are used.
+func (r *relay) exchangeHedged(packet []byte, req dnsmessage.Header, q dnsmessage.Question, primary storm.Connection, deliver func([]byte)) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	results := make(chan queryResult, 2)
@@ -39,17 +41,18 @@ func (r *relay) exchangeHedged(packet []byte, req dnsmessage.Header, q dnsmessag
 			start(other)
 		}
 	}
-	timer := time.NewTimer(300 * time.Millisecond)
+	timer := time.NewTimer(700 * time.Millisecond)
 	defer timer.Stop()
 	timerC := timer.C
+	succeeded := false
 	for pending > 0 {
 		select {
 		case result := <-results:
 			pending--
 			if result.err == nil {
-				return result.reply, nil
-			}
-			if !alternateStarted {
+				deliver(result.reply)
+				succeeded = true
+			} else if !alternateStarted {
 				launchAlternate()
 			}
 		case <-timerC:
@@ -57,7 +60,10 @@ func (r *relay) exchangeHedged(packet []byte, req dnsmessage.Header, q dnsmessag
 			launchAlternate()
 		}
 	}
-	return nil, errors.New("no valid upstream response")
+	if !succeeded {
+		return errors.New("no valid upstream response")
+	}
+	return nil
 }
 
 func (r *relay) exchangeOne(ctx context.Context, packet []byte, req dnsmessage.Header, q dnsmessage.Question, c storm.Connection) ([]byte, error) {
@@ -84,6 +90,8 @@ func (r *relay) exchangeOne(ctx context.Context, packet []byte, req dnsmessage.H
 		}
 		return nil, err
 	}
+	r.dnsUpBytes.Add(uint64(len(packet)))
+	r.dnsUpPackets.Add(1)
 	buf := make([]byte, maxPacket)
 	n, err := conn.Read(buf)
 	if err != nil {
@@ -92,6 +100,8 @@ func (r *relay) exchangeOne(ctx context.Context, packet []byte, req dnsmessage.H
 		}
 		return nil, err
 	}
+	r.dnsDownBytes.Add(uint64(n))
+	r.dnsDownPackets.Add(1)
 	reply := buf[:n]
 	h, rq, err := question(reply, true)
 	var parsed dnsmessage.Message

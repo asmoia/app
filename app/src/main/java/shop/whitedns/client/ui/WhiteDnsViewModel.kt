@@ -2738,6 +2738,7 @@ class WhiteDnsViewModel(
             lastTrafficSnapshot = current
             return ConnectionStats(
                 connectedApps = connectedApps,
+                usageMayIncludeLocalTraffic = current.sourceKey.startsWith(UidTrafficSourcePrefix),
             )
         }
         lastTrafficSnapshot = current
@@ -2756,6 +2757,7 @@ class WhiteDnsViewModel(
             downloadBytes = downloadBytes,
             uploadBytes = uploadBytes,
             totalDataUsageBytes = downloadBytes + uploadBytes,
+            usageMayIncludeLocalTraffic = current.sourceKey.startsWith(UidTrafficSourcePrefix),
             downloadSpeedBytesPerSecond = downloadSpeed,
             uploadSpeedBytesPerSecond = uploadSpeed,
             peakSpeedBytesPerSecond = peakSpeed,

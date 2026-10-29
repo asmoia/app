@@ -595,6 +595,8 @@ data class ConnectionStats(
     val downloadBytes: Long = 0,
     val uploadBytes: Long = 0,
     val totalDataUsageBytes: Long = 0,
+    // UID counters may include local loopback traffic; not a carrier bill.
+    val usageMayIncludeLocalTraffic: Boolean = false,
     val downloadSpeedBytesPerSecond: Long = 0,
     val uploadSpeedBytesPerSecond: Long = 0,
     val peakSpeedBytesPerSecond: Long = 0,

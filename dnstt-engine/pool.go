@@ -22,18 +22,36 @@ import (
 // A pool distributes individual TCP connections over independently verified
 // tunnels. It does not stripe a single stream across unrelated servers.
 type tunnelPool struct {
-	mu        sync.Mutex
-	ready     map[int]string
-	active    map[net.Conn]struct{}
-	counter   atomic.Uint64
-	sem       chan struct{}
-	workers   sync.WaitGroup
-	localUser string
-	localPass string
+	mu            sync.Mutex
+	ready         map[int]string
+	active        map[net.Conn]struct{}
+	counter       atomic.Uint64
+	slotActive    [3]atomic.Int32
+	healthRequest [3]chan struct{}
+	sem           chan struct{}
+	workers       sync.WaitGroup
+	localUser     string
+	localPass     string
 }
 
 func newTunnelPool() *tunnelPool {
-	return &tunnelPool{ready: map[int]string{}, active: map[net.Conn]struct{}{}, sem: make(chan struct{}, 256)}
+	p := &tunnelPool{ready: map[int]string{}, active: map[net.Conn]struct{}{}, sem: make(chan struct{}, 256)}
+	for i := range p.healthRequest {
+		p.healthRequest[i] = make(chan struct{}, 1)
+	}
+	return p
+}
+
+// A failed new CONNECT requests an out-of-band probe; it is not itself proof
+// that the tunnel is broken (the destination may be unreachable).
+func (p *tunnelPool) requestHealth(slot int) {
+	if slot < 0 || slot >= len(p.healthRequest) {
+		return
+	}
+	select {
+	case p.healthRequest[slot] <- struct{}{}:
+	default:
+	}
 }
 func (p *tunnelPool) set(slot int, addr string) int {
 	p.mu.Lock()
@@ -152,6 +170,7 @@ func (p *tunnelPool) handleClient(c net.Conn) error {
 	for _, path := range paths {
 		up, err := net.DialTimeout("tcp", path.addr, 3*time.Second)
 		if err != nil {
+			p.requestHealth(path.slot)
 			continue
 		}
 		p.track(up, true)
@@ -168,6 +187,7 @@ func (p *tunnelPool) handleClient(c net.Conn) error {
 			p.track(up, false)
 			_ = up.Close()
 			fmt.Printf("SLOWDNS_POOL connect_retry slot=%d\n", path.slot)
+			p.requestHealth(path.slot)
 			continue
 		}
 		if _, err = c.Write(reply); err != nil {
@@ -177,6 +197,7 @@ func (p *tunnelPool) handleClient(c net.Conn) error {
 		}
 		_ = c.SetDeadline(time.Time{})
 		_ = up.SetDeadline(time.Time{})
+		p.slotActive[path.slot].Add(1)
 		done := make(chan struct{}, 2)
 		pipe := func(dst, src net.Conn) {
 			_, _ = io.Copy(dst, src)
@@ -189,6 +210,7 @@ func (p *tunnelPool) handleClient(c net.Conn) error {
 		go pipe(c, up)
 		<-done
 		<-done
+		p.slotActive[path.slot].Add(-1)
 		p.track(up, false)
 		_ = up.Close()
 		return nil
@@ -354,7 +376,7 @@ func poolSlot(ctx context.Context, p *tunnelPool, exe, dir string, slot, stride 
 					defer watchWG.Done()
 					watchSlotHealth(watchCtx, p, slot, addr, cfg, cmd)
 				}()
-			} else if strings.HasPrefix(scanner.Text(), "SLOWDNS_PATH ") || strings.HasPrefix(scanner.Text(), "SLOWDNS_PROBE ") {
+			} else if strings.HasPrefix(scanner.Text(), "SLOWDNS_PATH ") || strings.HasPrefix(scanner.Text(), "SLOWDNS_PROBE ") || strings.HasPrefix(scanner.Text(), "SLOWDNS_METRICS ") {
 				fmt.Printf("SLOWDNS_SERVER server=%s %s\n", zone, scanner.Text())
 			} else if _, reason, ok := strings.Cut(scanner.Text(), "SLOWDNS_ERROR:"); ok {
 				fmt.Printf("SLOWDNS_SERVER server=%s failed=%s\n", zone, strings.TrimSpace(reason))
@@ -385,37 +407,59 @@ func killSlotGroup(child *exec.Cmd) {
 	}
 }
 
+func healthProbeDue(elapsed time.Duration, active, requested bool) bool {
+	if requested {
+		return elapsed >= 10*time.Second
+	}
+	if active {
+		return elapsed >= 20*time.Second
+	}
+	return elapsed >= 60*time.Second
+}
+
 func watchSlotHealth(ctx context.Context, p *tunnelPool, slot int, addr string, cfg engineConfig, child *exec.Cmd) {
 	verifyURL := cfg.VerifyURL
 	if verifyURL == "" {
 		verifyURL = "https://example.com/"
 	}
-	ticker := time.NewTicker(20 * time.Second)
+	// Preserve prompt checks for active streams; idle slots use fewer complete
+	// TLS probes. Failed CONNECTs can request an earlier check, rate-limited to
+	// avoid probe storms when callers repeatedly request unreachable sites.
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	lastProbe := time.Now() // initial readiness already performed a full check
 	failures := 0
+	requested := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			probeCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-			err := verifyTunnel(probeCtx, addr, cfg.LocalUsername, cfg.LocalPassword, verifyURL)
-			cancel()
-			if ctx.Err() != nil {
-				return
-			}
-			if err == nil {
-				failures = 0
-				continue
-			}
-			failures++
-			fmt.Printf("SLOWDNS_HEALTH slot=%d failed=%d\n", slot, failures)
-			if failures >= 2 {
-				count := p.set(slot, "")
-				fmt.Printf("SLOWDNS_HEALTH slot=%d restarting=true ready=%d\n", slot, count)
-				killSlotGroup(child)
-				return
-			}
+		case <-p.healthRequest[slot]:
+			requested = true
+		}
+		if !healthProbeDue(time.Since(lastProbe), p.slotActive[slot].Load() > 0 || failures > 0, requested) {
+			continue
+		}
+		requested = false
+		lastProbe = time.Now()
+		probeCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+		err := verifyTunnel(probeCtx, addr, cfg.LocalUsername, cfg.LocalPassword, verifyURL)
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil {
+			failures = 0
+			continue
+		}
+		failures++
+		fmt.Printf("SLOWDNS_HEALTH slot=%d failed=%d\n", slot, failures)
+		if failures >= 2 {
+			count := p.set(slot, "")
+			fmt.Printf("SLOWDNS_HEALTH slot=%d restarting=true ready=%d\n", slot, count)
+			killSlotGroup(child)
+			return
 		}
 	}
 }

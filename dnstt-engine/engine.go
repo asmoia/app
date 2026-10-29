@@ -253,6 +253,7 @@ func runEngine(ctx context.Context, cfg engineConfig, addresses []string) error 
 		return err
 	}
 	proxy := newSocksRelay(upstream, cfg.Username, cfg.Password, cfg.LocalUsername, cfg.LocalPassword)
+	go reportSlowDNSMetrics(ctx, relay, proxy)
 	proxyDone := make(chan error, 1)
 	go func() { proxyDone <- proxy.serve(ctx, listen) }()
 	fmt.Println("WD_PROGRESS phase=authenticating percent=15")

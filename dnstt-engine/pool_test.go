@@ -110,3 +110,30 @@ func TestPoolRejectsBadLocalCredentials(t *testing.T) {
 		t.Fatal("accepted wrong credentials")
 	}
 }
+
+func TestHealthSchedulingIdleBusyAndOnDemand(t *testing.T) {
+	cases := []struct {
+		elapsed                 time.Duration
+		active, requested, want bool
+	}{
+		{19 * time.Second, true, false, false}, {20 * time.Second, true, false, true},
+		{59 * time.Second, false, false, false}, {60 * time.Second, false, false, true},
+		{9 * time.Second, false, true, false}, {10 * time.Second, false, true, true},
+	}
+	for _, c := range cases {
+		if got := healthProbeDue(c.elapsed, c.active, c.requested); got != c.want {
+			t.Fatalf("elapsed %v active %v requested %v got %v", c.elapsed, c.active, c.requested, got)
+		}
+	}
+}
+
+func TestHealthRequestsAreBounded(t *testing.T) {
+	p := newTunnelPool()
+	p.requestHealth(0)
+	p.requestHealth(0)
+	p.requestHealth(-1)
+	p.requestHealth(3)
+	if len(p.healthRequest[0]) != 1 {
+		t.Fatal("requests should coalesce")
+	}
+}
