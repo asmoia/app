@@ -1,0 +1,107 @@
+{
+  "report": "BD NET VPN",
+  "username": "tanginakaba",
+  "password": "hackpamoregago",
+  "servers": [
+    {
+      "name": "de1.liftmeon.org",
+      "zone": "sd-de1.liftmeon.org",
+      "address": "13.140.185.158:53"
+    },
+    {
+      "name": "de2.liftmeon.org",
+      "zone": "sd-de2.liftmeon.org",
+      "address": "13.140.185.159:53"
+    },
+    {
+      "name": "de3.liftmeon.org",
+      "zone": "sd-de3.liftmeon.org",
+      "address": "13.140.185.160:53"
+    },
+    {
+      "name": "de4.liftmeon.org",
+      "zone": "sd-de4.liftmeon.org",
+      "address": "13.140.185.162:53"
+    },
+    {
+      "name": "de5.liftmeon.org",
+      "zone": "sd-de5.liftmeon.org",
+      "address": "13.140.185.163:53"
+    },
+    {
+      "name": "de6.liftmeon.org",
+      "zone": "sd-de6.liftmeon.org",
+      "address": "13.140.185.161:53"
+    },
+    {
+      "name": "de7.liftmeon.org",
+      "zone": "sd-de7.liftmeon.org",
+      "address": "13.140.185.164:53"
+    },
+    {
+      "name": "de8.liftmeon.org",
+      "zone": "sd-de8.liftmeon.org",
+      "address": "13.140.185.165:53"
+    },
+    {
+      "name": "de9.liftmeon.org",
+      "zone": "sd-de9.liftmeon.org",
+      "address": "13.140.185.168:53"
+    },
+    {
+      "name": "de10.liftmeon.org",
+      "zone": "sd-de10.liftmeon.org",
+      "address": "13.140.185.170:53"
+    },
+    {
+      "name": "de11.liftmeon.org",
+      "zone": "sd-de11.liftmeon.org",
+      "address": "13.140.185.171:53"
+    },
+    {
+      "name": "de12.liftmeon.org",
+      "zone": "sd-de12.liftmeon.org",
+      "address": "13.140.185.172:53"
+    },
+    {
+      "name": "de13.liftmeon.org",
+      "zone": "sd-de13.liftmeon.org",
+      "address": "13.140.185.173:53"
+    },
+    {
+      "name": "de14.liftmeon.org",
+      "zone": "sd-de14.liftmeon.org",
+      "address": "13.140.185.174:53"
+    },
+    {
+      "name": "de15.liftmeon.org",
+      "zone": "sd-de15.liftmeon.org",
+      "address": "13.140.185.175:53"
+    },
+    {
+      "name": "de16.liftmeon.org",
+      "zone": "sd-de16.liftmeon.org",
+      "address": "13.140.185.176:53"
+    },
+    {
+      "name": "de17.liftmeon.org",
+      "zone": "sd-de17.liftmeon.org",
+      "address": "13.140.185.177:53"
+    },
+    {
+      "name": "de18.liftmeon.org",
+      "zone": "sd-de18.liftmeon.org",
+      "address": "13.140.185.178:53"
+    },
+    {
+      "name": "de19.liftmeon.org",
+      "zone": "sd-de19.liftmeon.org",
+      "address": "13.140.185.180:53"
+    },
+    {
+      "name": "de20.liftmeon.org",
+      "zone": "sd-de20.liftmeon.org",
+      "address": "13.140.185.181:53"
+    }
+  ]
+}

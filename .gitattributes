@@ -1,0 +1,6 @@
+*.sh text eol=lf
+third_party/tun2proxy/* text eol=lf
+soar-engine/data/resolvers/*.txt text eol=lf
+
+soar-engine/third_party/soar/testdata/*.json text eol=lf
+soar-engine/third_party/soar/data/**/*.txt text eol=lf

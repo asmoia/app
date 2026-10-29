@@ -1,0 +1,7 @@
+WD_SCAN event=testing resolver=1.1.1.1:53 transport=udp
+WD_SCAN event=valid resolver=1.1.1.1:53
+WD_PROGRESS phase=mtu completed=1 total=2 valid=1 rejected=0
+WD_SCAN event=testing resolver=8.8.8.8:53 transport=udp
+WD_SCAN event=valid resolver=8.8.8.8:53
+WD_PROGRESS phase=mtu completed=2 total=2 valid=2 rejected=0
+WD_SCAN event=complete total=2 valid=2 rejected=0

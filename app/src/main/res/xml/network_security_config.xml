@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- User-supplied HTTP sources require per-source consent in fetchSubscription.
+         Arbitrary user hostnames cannot be enumerated in Android domain-config. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

@@ -1,0 +1,10 @@
+{
+  "upstream": "https://github.com/tun2proxy/tun2proxy",
+  "version": "0.8.1",
+  "commit": "27466222b9261d7ef4a4872fc15111cf0d0e95bb",
+  "rust": "1.99.1",
+  "android_api": 26,
+  "patch_sha256": "86ad638afe2a029702b7cd6b1aca57018dae43311cd43b9a641539f64d1e3183",
+  "cargo_lock_sha256": "4b3306676e3d1e82a53fab980d66a093130c1f17835811425bb1905648368af3",
+  "patched_general_api_sha256": "4b3f1024e56ae6d38f3ff940c716c153124b66ba5950085c0c5e978d8a4eda2d"
+}

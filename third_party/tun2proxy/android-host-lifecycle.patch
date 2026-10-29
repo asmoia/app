@@ -1,0 +1,23 @@
+diff --git a/src/general_api.rs b/src/general_api.rs
+index 6377302..9a1128d 100644
+--- a/src/general_api.rs
++++ b/src/general_api.rs
+@@ -61,12 +61,18 @@ pub fn general_run_for_api(args: Args, tun_mtu: u16, packet_information: bool) -
+         let ret = general_run_async(args_clone, tun_mtu, packet_information, shutdown_token).await;
+         // Spawn a std thread to force exit after timeout so it isn't cancelled
+         // when the tokio runtime is dropped.
++        // Android runs this JNI entry point inside the hosting app process.
++        // A normal VPN stop must return to Java, not terminate the entire app
++        // two seconds later (possibly during its next connection).
++        #[cfg(not(target_os = "android"))]
+         let _h = std::thread::spawn(move || {
+             // Delay some seconds then try to exit current process if not exited yet, normally this case should not happen
+             std::thread::sleep(crate::FORCE_EXIT_TIMEOUT);
+             log::info!("Forcing exit now.");
+             std::process::exit(-1);
+         });
++        #[cfg(target_os = "android")]
++        log::debug!("WHITEDNS_ANDROID_HOST_LIFECYCLE_V1: returning to host");
+         tokio::time::sleep(std::time::Duration::from_micros(100)).await;
+         ret
+     });

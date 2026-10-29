@@ -1,0 +1,60 @@
+{
+  "zone": "sd-de20.liftmeon.org",
+  "scope": "authorized live server, host Linux/qemu; not Android or Iran",
+  "results": [
+    {
+      "test": "direct",
+      "status": "PASS",
+      "http_status_line": "HTTP 200 OK",
+      "tls_verified": true,
+      "client_log_markers": [
+        "2026/10/29 16:06:33 effective MTU 130",
+        "2026/10/29 16:06:33 begin session 99a32845",
+        "2026/10/29 16:06:34 begin stream 99a32845:3"
+      ],
+      "elapsed_s": 17.92
+    },
+    {
+      "test": "bridge_direct_server",
+      "status": "PASS",
+      "http_status_line": "HTTP 200 OK",
+      "tls_verified": true,
+      "client_log_markers": [
+        "2026/10/29 16:06:51 effective MTU 130",
+        "2026/10/29 16:06:51 begin session 756406aa",
+        "2026/10/29 16:06:53 begin stream 756406aa:3"
+      ],
+      "bridge_stats": {
+        "sends": {
+          "13.140.185.181:53": 104
+        },
+        "valid_responses": {
+          "13.140.185.181:53": 70
+        }
+      },
+      "elapsed_s": 24.91
+    },
+    {
+      "test": "bridge_public_resolvers",
+      "status": "PASS",
+      "http_status_line": "HTTP 200 OK",
+      "tls_verified": true,
+      "client_log_markers": [
+        "2026/10/29 16:07:16 effective MTU 130",
+        "2026/10/29 16:07:16 begin session 1885dce7",
+        "2026/10/29 16:07:16 begin stream 1885dce7:3"
+      ],
+      "bridge_stats": {
+        "sends": {
+          "1.1.1.1:53": 55,
+          "8.8.8.8:53": 51
+        },
+        "valid_responses": {
+          "1.1.1.1:53": 50,
+          "8.8.8.8:53": 43
+        }
+      },
+      "elapsed_s": 7.11
+    }
+  ]
+}

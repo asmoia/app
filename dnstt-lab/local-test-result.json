@@ -1,0 +1,10 @@
+{
+  "status": "PASS",
+  "http_status": 200,
+  "body_verified": true,
+  "query_counts_per_local_simulated_resolver": [
+    6,
+    5
+  ],
+  "scope": "single local DNSTT server; not BD NET or Android"
+}

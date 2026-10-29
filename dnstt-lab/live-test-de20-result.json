@@ -1,0 +1,60 @@
+{
+  "zone": "sd-de20.liftmeon.org",
+  "scope": "authorized live server, host Linux/qemu; not Android or Iran",
+  "results": [
+    {
+      "test": "direct",
+      "status": "PASS",
+      "http_status_line": "HTTP/1.1 200 OK",
+      "tls_verified": true,
+      "client_log_markers": [
+        "2026/10/29 16:05:33 effective MTU 130",
+        "2026/10/29 16:05:33 begin session 123803fc",
+        "2026/10/29 16:05:33 begin stream 123803fc:3"
+      ],
+      "elapsed_s": 3.83
+    },
+    {
+      "test": "bridge_direct_server",
+      "status": "PASS",
+      "http_status_line": "HTTP/1.1 200 OK",
+      "tls_verified": true,
+      "client_log_markers": [
+        "2026/10/29 16:05:37 effective MTU 130",
+        "2026/10/29 16:05:37 begin session 883029a7",
+        "2026/10/29 16:05:37 begin stream 883029a7:3"
+      ],
+      "bridge_stats": {
+        "sends": {
+          "13.140.185.181:53": 93
+        },
+        "valid_responses": {
+          "13.140.185.181:53": 70
+        }
+      },
+      "elapsed_s": 14.97
+    },
+    {
+      "test": "bridge_public_resolvers",
+      "status": "FAIL",
+      "stage": "tls_https",
+      "error": "RuntimeError: invalid HTTPS response",
+      "client_log_markers": [
+        "2026/10/29 16:05:52 effective MTU 130",
+        "2026/10/29 16:05:52 begin session a02faf8b",
+        "2026/10/29 16:05:52 begin stream a02faf8b:3"
+      ],
+      "bridge_stats": {
+        "sends": {
+          "1.1.1.1:53": 107,
+          "8.8.8.8:53": 92
+        },
+        "valid_responses": {
+          "1.1.1.1:53": 66,
+          "8.8.8.8:53": 39
+        }
+      },
+      "elapsed_s": 27.42
+    }
+  ]
+}

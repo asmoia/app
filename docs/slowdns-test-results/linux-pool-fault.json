@@ -1,0 +1,12 @@
+{
+  "status": "PASS",
+  "servers": [
+    "sd-de1.liftmeon.org",
+    "sd-de20.liftmeon.org"
+  ],
+  "ready_sessions": 2,
+  "https_requests_before_fault": 4,
+  "killed_child": true,
+  "new_https_requests_after_fault": 2,
+  "scope": "Linux with qemu client; not a phone"
+}

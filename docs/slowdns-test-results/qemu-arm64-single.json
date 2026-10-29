@@ -1,0 +1,8 @@
+{
+  "status": "PASS",
+  "server": "sd-de1.liftmeon.org",
+  "resolvers": 2,
+  "readiness": "authenticated HTTPS",
+  "separate_request": "HTTP/1.1 200 OK",
+  "scope": "Linux with optional qemu; not Android device"
+}

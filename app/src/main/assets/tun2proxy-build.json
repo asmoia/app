@@ -1,0 +1,59 @@
+{
+  "source": {
+    "upstream": "https://github.com/tun2proxy/tun2proxy",
+    "version": "0.8.1",
+    "commit": "27466222b9261d7ef4a4872fc15111cf0d0e95bb",
+    "rust": "1.99.1",
+    "android_api": 26,
+    "patch_sha256": "86ad638afe2a029702b7cd6b1aca57018dae43311cd43b9a641539f64d1e3183",
+    "cargo_lock_sha256": "4b3306676e3d1e82a53fab980d66a093130c1f17835811425bb1905648368af3",
+    "patched_general_api_sha256": "4b3f1024e56ae6d38f3ff940c716c153124b66ba5950085c0c5e978d8a4eda2d"
+  },
+  "native": {
+    "arm64-v8a": {
+      "sha256": "325f995047c4d18d2c8b8d8af1e05c53f532bbe249bc1d8b3194dbf41ecb4570",
+      "bytes": 4699608,
+      "needed": [
+        "liblog.so",
+        "libdl.so",
+        "libm.so",
+        "libc.so"
+      ],
+      "api26_unresolved_symbols": []
+    },
+    "armeabi-v7a": {
+      "sha256": "3c450bbd6c95bd93c546d52ca4eace18ecfb00832e2756434403ea12af37d3b9",
+      "bytes": 3083980,
+      "needed": [
+        "liblog.so",
+        "libdl.so",
+        "libm.so",
+        "libc.so"
+      ],
+      "api26_unresolved_symbols": []
+    },
+    "x86_64": {
+      "sha256": "e6820f25b3ddcf3b3da2788c64c0c3e41c489505173366b615dda132e92061a0",
+      "bytes": 5128640,
+      "needed": [
+        "liblog.so",
+        "libdl.so",
+        "libm.so",
+        "libc.so"
+      ],
+      "api26_unresolved_symbols": []
+    },
+    "x86": {
+      "sha256": "91bc3910b159452778dd3593090321b81672bef83f069df5b09cfcb17da9736e",
+      "bytes": 5143864,
+      "needed": [
+        "liblog.so",
+        "libdl.so",
+        "libm.so",
+        "libc.so"
+      ],
+      "api26_unresolved_symbols": []
+    }
+  },
+  "host_lifecycle_patch": "WHITEDNS_ANDROID_HOST_LIFECYCLE_V1"
+}

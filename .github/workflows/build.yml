@@ -1,0 +1,98 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+          cache-dependency-path: |
+            dnstt-engine/go.sum
+            third_party/StormDNS/go.sum
+            soar-engine/go.sum
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - name: Android SDK
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;26.3.11579264'
+      - name: Test SlowDNS
+        working-directory: dnstt-engine
+        run: go test -race ./...
+      - name: Build SlowDNS helper
+        run: |
+          set -euo pipefail
+          cp app/src/main/jniLibs/arm64-v8a/libxdnstt.so "$RUNNER_TEMP/client.so"
+          BDNET_CLIENT_SO="$RUNNER_TEMP/client.so" make slowdns
+      - name: Build Soar helper
+        run: |
+          set -euo pipefail
+          python3 scripts/android_go_toolchain.py "$(go env GOVERSION)"
+          cd soar-engine
+          CGO_ENABLED=1 GOOS=android GOARCH=arm64 \
+          CC="$ANDROID_HOME/ndk/26.3.11579264/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang" \
+          go build -mod=readonly -trimpath -buildvcs=false -buildmode=pie \
+            -ldflags '-s -w -linkmode external -extldflags "-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384"' \
+            -o ../app/src/main/jniLibs/arm64-v8a/libsoar_client.so .
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+      - name: Build APK
+        run: ./gradlew :app:assembleRelease --no-daemon -PWHITE_DNS_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
+      - name: Sign APK
+        env:
+          ANDROID_SIGNING_KEYSTORE_BASE64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}
+          ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_SIGNING_KEYSTORE_BASE64"
+          printf %s "$ANDROID_SIGNING_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          chmod 600 "$RUNNER_TEMP/signing.p12"
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          unsigned='app/build/outputs/apk/release/app-arm64-v8a-release-unsigned.apk'
+          test -f "$unsigned"
+          "$tools/zipalign" -f -p 4 "$unsigned" "$RUNNER_TEMP/aligned.apk"
+          mkdir -p output
+          "$tools/apksigner" sign --ks "$RUNNER_TEMP/signing.p12" \
+            --ks-pass env:ANDROID_SIGNING_STORE_PASSWORD \
+            --ks-key-alias "$ANDROID_SIGNING_KEY_ALIAS" --key-pass env:ANDROID_SIGNING_KEY_PASSWORD \
+            --out output/app-arm64.apk "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" verify --verbose output/app-arm64.apk
+          python3 - <<'PY'
+          import hashlib, zipfile
+          path='output/app-arm64.apk'
+          with zipfile.ZipFile(path) as apk:
+              for name in ('lib/arm64-v8a/libslowdns_engine.so','lib/arm64-v8a/libxdnstt.so','lib/arm64-v8a/libsoar_client.so'):
+                  assert name in apk.namelist(), f'Missing {name}'
+              digest=hashlib.sha256(apk.read('lib/arm64-v8a/libxdnstt.so')).hexdigest()
+              assert digest=='9fb149ad83ab5f94e32c298ecc0bbc9840159ea6365413566b74f61aa7c66a86', 'Unexpected SlowDNS client'
+          print('Verified native arm64 libraries in APK')
+          PY
+          sha256sum output/app-arm64.apk > output/SHA256SUMS.txt
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="build-${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" output/* --target "$GITHUB_SHA" --title "$tag" --notes ''
