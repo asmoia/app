@@ -376,7 +376,7 @@ func poolSlot(ctx context.Context, p *tunnelPool, exe, dir string, slot, stride 
 					defer watchWG.Done()
 					watchSlotHealth(watchCtx, p, slot, addr, cfg, cmd)
 				}()
-			} else if strings.HasPrefix(scanner.Text(), "SLOWDNS_PATH ") || strings.HasPrefix(scanner.Text(), "SLOWDNS_PROBE ") || strings.HasPrefix(scanner.Text(), "SLOWDNS_METRICS ") {
+			} else if strings.HasPrefix(scanner.Text(), "SLOWDNS_PATH ") || strings.HasPrefix(scanner.Text(), "SLOWDNS_PROBE ") || strings.HasPrefix(scanner.Text(), "SLOWDNS_METRICS ") || strings.HasPrefix(scanner.Text(), "SLOWDNS_BRIDGE ") {
 				fmt.Printf("SLOWDNS_SERVER server=%s %s\n", zone, scanner.Text())
 			} else if _, reason, ok := strings.Cut(scanner.Text(), "SLOWDNS_ERROR:"); ok {
 				fmt.Printf("SLOWDNS_SERVER server=%s failed=%s\n", zone, strings.TrimSpace(reason))

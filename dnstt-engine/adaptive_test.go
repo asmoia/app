@@ -80,7 +80,9 @@ func TestAdaptiveRescanRechecksPreferredAndDoesNotSkipUndispatched(t *testing.T)
 	for i := 0; i < 1200; i++ {
 		addrs = append(addrs, fmt.Sprintf("127.0.0.1:%d", 30000+i))
 	}
-	r, err := newRelay(addrs, "test.invalid", 100*time.Millisecond)
+	// Keep all 28 silent preferred sockets blocked until the responsive
+	// resolvers cancel discovery, even on a heavily loaded race-test runner.
+	r, err := newRelay(addrs, "test.invalid", 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,5 +134,31 @@ func TestTunnelProbeHonorsDeadline(t *testing.T) {
 	}
 	if time.Since(start) > 250*time.Millisecond {
 		t.Fatal("deadline ignored")
+	}
+}
+
+func TestTunnelProbeCancelsBlockedRead(t *testing.T) {
+	a := fake(t, false, false)
+	r, err := newRelay([]string{a}, "test.invalid", 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	packet := query(t, "probe.test.invalid.")
+	go func() { _, e := r.tunnelProbe(ctx, a, packet); done <- e }()
+	time.Sleep(30 * time.Millisecond)
+	start := time.Now()
+	cancel()
+	select {
+	case e := <-done:
+		if e == nil {
+			t.Fatal("cancelled probe unexpectedly succeeded")
+		}
+		if time.Since(start) > 250*time.Millisecond {
+			t.Fatal("cancellation was too slow")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("cancel did not interrupt read")
 	}
 }

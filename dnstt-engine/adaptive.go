@@ -162,6 +162,8 @@ func (r *relay) tunnelProbe(ctx context.Context, address string, packet []byte) 
 		return nil, err
 	}
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	deadline := time.Now().Add(r.timeout)
 	if end, ok := ctx.Deadline(); ok && end.Before(deadline) {
 		deadline = end

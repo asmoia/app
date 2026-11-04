@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
@@ -199,10 +200,26 @@ func (r *relay) selectDNSPath() (storm.Connection, bool) {
 	return primary, true
 }
 
-func (r *relay) serve(ctx context.Context, conn *net.UDPConn) error {
+type udpBridgeConn interface {
+	ReadFromUDP([]byte) (int, *net.UDPAddr, error)
+	WriteToUDP([]byte, *net.UDPAddr) (int, error)
+	Close() error
+}
+
+// A local UDP socket may report an error that is transient. Retrying a
+// bounded number can avoid restarting a tunnel for one transient error;
+// persistent failures still escape to the pool monitor.
+func retryableUDPRead(err error) bool {
+	return errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ENOBUFS) || errors.Is(err, syscall.EINTR) ||
+		errors.Is(err, syscall.EAGAIN)
+}
+
+func (r *relay) serve(ctx context.Context, conn udpBridgeConn) error {
 	var workers sync.WaitGroup
 	defer workers.Wait()
-	go func() { <-ctx.Done(); conn.Close() }()
+	go func() { <-ctx.Done(); _ = conn.Close() }()
+	readFailures := 0
 	for {
 		data := make([]byte, maxPacket+1)
 		n, from, err := conn.ReadFromUDP(data)
@@ -210,8 +227,22 @@ func (r *relay) serve(ctx context.Context, conn *net.UDPConn) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			return err
+			readFailures++
+			if !retryableUDPRead(err) || readFailures > 8 {
+				return err
+			}
+			fmt.Printf("SLOWDNS_BRIDGE transient_read retry=%d\n", readFailures)
+			delay := 25 * time.Millisecond * time.Duration(1<<min(readFailures-1, 5))
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil
+			case <-timer.C:
+			}
+			continue
 		}
+		readFailures = 0
 		if n > maxPacket || !from.IP.IsLoopback() {
 			continue
 		}
