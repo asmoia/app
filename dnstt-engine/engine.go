@@ -30,7 +30,9 @@ type engineConfig struct {
 	SkipPreflight      bool              `json:"skipPreflight"`
 	BootstrapResolvers []string          `json:"bootstrapResolvers"`
 	ServerAddresses    map[string]string `json:"serverAddresses"`
+	ResolveDirectHost  bool              `json:"resolveDirectHost"`
 	PublicKey          string            `json:"publicKey"`
+	UpstreamMode       string            `json:"upstreamMode"` // empty/socks5 or shadowsocks-none
 	Report             string            `json:"report"`
 	ClientBinary       string            `json:"clientBinary"`
 	Username           string            `json:"username"`
@@ -44,8 +46,14 @@ type engineConfig struct {
 }
 
 func (c engineConfig) validate() error {
-	if c.Domain == "" || c.PublicKey == "" || c.ClientBinary == "" || c.Username == "" {
-		return errors.New("domain, key, compatible client and remote credentials are required")
+	if c.Domain == "" || c.PublicKey == "" || c.ClientBinary == "" {
+		return errors.New("domain, key and compatible client are required")
+	}
+	if c.UpstreamMode != "" && c.UpstreamMode != "socks5" && c.UpstreamMode != "shadowsocks-none" {
+		return errors.New("unsupported upstream mode")
+	}
+	if c.UpstreamMode != "shadowsocks-none" && c.Username == "" {
+		return errors.New("remote SOCKS credentials are required")
 	}
 	if net.ParseIP(c.ListenHost) == nil || !net.ParseIP(c.ListenHost).IsLoopback() {
 		return errors.New("SlowDNS SOCKS must bind to loopback")
@@ -192,6 +200,12 @@ func prioritizedResolvers(cfg engineConfig, addresses []string) []string {
 	candidates := append([]string(nil), cfg.BootstrapResolvers...)
 	if direct := cfg.ServerAddresses[cfg.Domain]; direct != "" {
 		candidates = append(candidates, direct)
+	} else if cfg.ResolveDirectHost && cfg.UpstreamMode == "shadowsocks-none" {
+		// Opt-in only for the built-in AM default resolver profile. Resolve
+		// the current host rather than pinning a potentially stale A record.
+		if direct := resolveAMServer(cfg.Domain, cfg.BootstrapResolvers); direct != "" {
+			candidates = append(candidates, direct)
+		}
 	}
 	for _, candidate := range candidates {
 		if parsed, err := expandResolvers(candidate, 1); err == nil && len(parsed) == 1 {
@@ -202,6 +216,45 @@ func prioritizedResolvers(cfg engineConfig, addresses []string) []string {
 		add(a)
 	}
 	return out
+}
+
+// Resolve only catalogued AM names and only through explicit bootstrap DNS.
+// A short global deadline prevents a blocked resolver from stalling connection.
+func resolveAMServer(zone string, resolvers []string) string {
+	host := strings.TrimPrefix(strings.ToLower(strings.TrimSuffix(zone, ".")), "sl")
+	if !strings.HasPrefix(host, "sa") || !strings.HasSuffix(host, ".supaghost.cc") {
+		return ""
+	}
+	n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(host, "sa"), ".supaghost.cc"))
+	if err != nil || n < 1 || n > 50 || host != fmt.Sprintf("sa%d.supaghost.cc", n) {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	for _, candidate := range resolvers {
+		parsed, err := expandResolvers(candidate, 1)
+		if err != nil || len(parsed) != 1 {
+			continue
+		}
+		d := net.Dialer{Timeout: 500 * time.Millisecond}
+		r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return d.DialContext(ctx, "udp", parsed[0])
+		}}
+		attempt, stop := context.WithTimeout(ctx, 500*time.Millisecond)
+		ips, err := r.LookupIP(attempt, "ip4", host)
+		stop()
+		if err == nil {
+			for _, ip := range ips {
+				if a, ok := netip.AddrFromSlice(ip); ok && a.Unmap().IsGlobalUnicast() && !a.Unmap().IsPrivate() {
+					return a.Unmap().String()
+				}
+			}
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return ""
 }
 
 func runEngine(ctx context.Context, cfg engineConfig, addresses []string) error {
@@ -253,6 +306,7 @@ func runEngine(ctx context.Context, cfg engineConfig, addresses []string) error 
 		return err
 	}
 	proxy := newSocksRelay(upstream, cfg.Username, cfg.Password, cfg.LocalUsername, cfg.LocalPassword)
+	proxy.upstreamMode = cfg.UpstreamMode
 	defer printSlowDNSMetrics(relay, proxy, true)
 	go reportSlowDNSMetrics(ctx, relay, proxy)
 	proxyDone := make(chan error, 1)

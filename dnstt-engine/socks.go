@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"errors"
@@ -18,6 +19,7 @@ type socksRelay struct {
 	upstream               string
 	remoteUser, remotePass string
 	localUser, localPass   string
+	upstreamMode           string
 	maxClients             chan struct{}
 	mu                     sync.Mutex
 	open                   map[net.Conn]struct{}
@@ -166,22 +168,35 @@ func (s *socksRelay) handle(c net.Conn) error {
 	s.track(upstream, true)
 	defer func() { s.track(upstream, false); _ = upstream.Close() }()
 	_ = upstream.SetDeadline(time.Now().Add(45 * time.Second))
-	if err = upstreamAuth(upstream, s.remoteUser, s.remotePass); err != nil {
-		_, _ = c.Write([]byte{5, 1, 0, 1, 0, 0, 0, 0, 0, 0})
-		return err
-	}
-	if _, err = upstream.Write(request); err != nil {
-		return err
-	}
-	reply, err := readSocksReply(upstream)
-	if err != nil {
-		return err
-	}
-	if _, err = c.Write(reply); err != nil {
-		return err
-	}
-	if reply[1] != 0 {
-		return fmt.Errorf("upstream connect failed: %d", reply[1])
+	if s.upstreamMode == "shadowsocks-none" {
+		// This server expects the Shadowsocks destination (ATYP, address,
+		// port), not a SOCKS greeting. There is no upstream CONNECT reply;
+		// success here only means the local header was sent, not that the
+		// destination is reachable. Readiness must use a real HTTPS fetch.
+		if _, err = io.Copy(upstream, bytes.NewReader(request[3:])); err != nil {
+			return err
+		}
+		if _, err = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
+			return err
+		}
+	} else {
+		if err = upstreamAuth(upstream, s.remoteUser, s.remotePass); err != nil {
+			_, _ = c.Write([]byte{5, 1, 0, 1, 0, 0, 0, 0, 0, 0})
+			return err
+		}
+		if _, err = upstream.Write(request); err != nil {
+			return err
+		}
+		reply, err := readSocksReply(upstream)
+		if err != nil {
+			return err
+		}
+		if _, err = c.Write(reply); err != nil {
+			return err
+		}
+		if reply[1] != 0 {
+			return fmt.Errorf("upstream connect failed: %d", reply[1])
+		}
 	}
 	_ = c.SetDeadline(time.Time{})
 	_ = upstream.SetDeadline(time.Time{})

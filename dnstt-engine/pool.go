@@ -237,7 +237,11 @@ func authenticateLocalUpstream(c net.Conn, user, pass string) error {
 }
 
 func runPool(ctx context.Context, cfg engineConfig, resolvers []string) error {
-	if len(cfg.Domains) > 20 {
+	limit := 20
+	if cfg.UpstreamMode == "shadowsocks-none" {
+		limit = 50
+	}
+	if len(cfg.Domains) > limit {
 		return errors.New("too many server domains")
 	}
 	size := cfg.PoolSize

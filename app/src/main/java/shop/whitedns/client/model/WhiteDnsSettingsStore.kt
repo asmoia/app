@@ -54,6 +54,14 @@ class WhiteDnsSettingsStore(
                 merged
             }
         } else storedConnectionProfiles
+        // Seed AM once without changing the selected profile; deletion remains
+        // respected on later loads. Scan results never rewrite these profiles.
+        val profilesWithSuperDns = if (!preferences.getBoolean("superdns_am_seeded_v1", false)) {
+            val merged = (connectionProfiles + shop.whitedns.client.storm.SuperDnsCatalog.profiles()).distinctBy { it.id }
+            preferences.edit().putString(KeyConnectionProfiles, encodeConnectionProfiles(merged))
+                .putBoolean("superdns_am_seeded_v1", true).commit()
+            merged
+        } else connectionProfiles
         val defaultResolverProfile = loadDefaultResolverProfile()
         val resolverProfiles = includeDefaultResolverProfile(
             profiles = decodeResolverProfiles(
@@ -89,9 +97,9 @@ class WhiteDnsSettingsStore(
         return WhiteDnsSettings(
             selectedConnectionProfileId = preferences.getString(
                 KeySelectedConnectionProfileId,
-                connectionProfiles.first().id,
-            ) ?: connectionProfiles.first().id,
-            connectionProfiles = connectionProfiles,
+                profilesWithSuperDns.first().id,
+            ) ?: profilesWithSuperDns.first().id,
+            connectionProfiles = profilesWithSuperDns,
             selectedResolverProfileId = initialSelectedResolverProfileId,
             resolverProfiles = resolverProfiles,
             selectedAdvancedProfileId = preferences.getString(

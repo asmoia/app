@@ -40,14 +40,15 @@ object SlowDnsConfigRenderer {
 
     fun render(context: Context, profile: StormDnsServerProfile, settings: WhiteDnsSettings, systemResolvers: List<String> = emptyList()): String {
         val data = defaults(context)
-        val zones = ServerDomains.split(profile.domain).map { it.lowercase() }
+        val rawZones = ServerDomains.split(profile.domain).map { it.lowercase() }
         val servers = data.getJSONArray("servers")
-        require(zones.isNotEmpty() && zones.size <= 20 && zones.all { zone ->
+        val isSuperDns = rawZones.isNotEmpty() && rawZones.size <= 50 && rawZones.all(SuperDnsCatalog::isZone)
+        val isBd = rawZones.isNotEmpty() && rawZones.size <= 20 && rawZones.all { zone ->
             (0 until servers.length()).any { servers.getJSONObject(it).getString("zone").equals(zone, ignoreCase = true) }
-        }) {
-            "SlowDNS compatibility mode currently supports the built-in BD NET servers only"
         }
-        require(profile.encryptionKey == "prince") { "This BD NET client requires its compatible key label" }
+        require(isSuperDns || isBd) { "Only built-in AM SuperDNS or BD NET server domains are supported; mixed pools are not supported" }
+        val zones = if (isSuperDns && rawZones.size > 1) SuperDnsScanRankStore(context).order(settings, rawZones) else rawZones
+        require(profile.encryptionKey == "prince") { "This compatible client requires its key label" }
         val resolved = settings.resolve()
         // Only the built-in default profile adds system/public bootstrap DNS and
         // the known server IP. Explicit custom resolver lists remain exact.
@@ -56,7 +57,7 @@ object SlowDnsConfigRenderer {
             (systemResolvers.filterNot { '%' in it } + listOf("1.1.1.1", "8.8.8.8", "9.9.9.9")).distinct()
         } else emptyList()
         val serverAddresses = JSONObject()
-        if (useDefaultResolvers) {
+        if (useDefaultResolvers && !isSuperDns) {
             for (i in 0 until servers.length()) {
                 val server = servers.getJSONObject(i)
                 serverAddresses.put(server.getString("zone").lowercase(), server.getString("address"))
@@ -70,11 +71,13 @@ object SlowDnsConfigRenderer {
             .put("poolSize", 2)
             .put("bootstrapResolvers", JSONArray(bootstrap))
             .put("serverAddresses", serverAddresses)
+            .put("resolveDirectHost", isSuperDns && useDefaultResolvers)
             .put("publicKey", profile.encryptionKey)
+            .put("upstreamMode", if (isSuperDns) "shadowsocks-none" else "socks5")
             .put("report", data.getString("report"))
             .put("clientBinary", client.absolutePath)
-            .put("username", data.getString("username"))
-            .put("password", data.getString("password"))
+            .put("username", if (isSuperDns) "" else data.getString("username"))
+            .put("password", if (isSuperDns) "" else data.getString("password"))
             .put("listenHost", "127.0.0.1")
             .put("listenPort", resolved.listenPort)
             .put("localUsername", if (resolved.socks5Authentication) resolved.socksUsername else "")

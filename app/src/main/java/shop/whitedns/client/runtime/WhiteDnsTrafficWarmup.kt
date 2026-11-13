@@ -5,6 +5,8 @@ import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.SSLSocketFactory
 import kotlin.math.min
 import shop.whitedns.client.model.ResolvedWhiteDnsSettings
 
@@ -46,6 +48,28 @@ object WhiteDnsTrafficWarmup {
                 return@use null
             }
             ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
+        }
+    }.getOrNull()
+
+    /** Real HTTPS response time, not the local (possibly optimistic) SOCKS ACK. */
+    fun measureSocksHttpsLatency(settings: ResolvedWhiteDnsSettings): Long? = runCatching {
+        val start = System.nanoTime()
+        Socket().use { socket ->
+            socket.soTimeout = 20_000
+            socket.connect(InetSocketAddress(localProxyHost(settings.listenIp), settings.listenPort), SocketTimeoutMillis)
+            if (!negotiateSocks(socket.getInputStream(), socket.getOutputStream(), settings) ||
+                !connectToTarget(socket.getInputStream(), socket.getOutputStream(), "example.com", 443)) return@use null
+            val ssl = (SSLSocketFactory.getDefault() as SSLSocketFactory)
+                .createSocket(socket, "example.com", 443, true) as SSLSocket
+            ssl.use {
+                it.soTimeout = 20_000
+                it.sslParameters = it.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
+                it.startHandshake()
+                it.outputStream.write("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
+                it.outputStream.flush()
+                if (!hasHttpStatusResponse(it.inputStream, 20_000)) return@use null
+                ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
+            }
         }
     }.getOrNull()
 

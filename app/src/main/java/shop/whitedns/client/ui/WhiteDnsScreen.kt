@@ -253,6 +253,7 @@ import shop.whitedns.client.model.validateResolverText
 import shop.whitedns.client.model.WhiteDnsAutoTunePresets
 import shop.whitedns.client.model.WhiteDnsParallelTest
 import shop.whitedns.client.model.syncSelectedConnectionProfileFields
+import shop.whitedns.client.storm.SuperDnsCatalog
 import shop.whitedns.client.storm.CottenDnsSettingsRenderer
 import shop.whitedns.client.storm.StormDnsConfigRenderer
 import com.google.zxing.BinaryBitmap
@@ -3703,15 +3704,14 @@ internal fun ConnectionProfilesSettings(
             actions = listOf(
                 ProfileMenuAction(
                     label = if (serverTestState.isRunning) {
-                        WhiteDnsL10n.serverTestRunning
+                        soarText("Stop server test", "توقف تست سرورها")
                     } else {
                         WhiteDnsL10n.serverTestButton
                     },
                     icon = Icons.Rounded.Speed,
-                    contentDescription = WhiteDnsL10n.serverTestButton,
-                    enabled = (connectionStatus == ConnectionStatus.CONNECTED ||
-                        (connectionStatus == ConnectionStatus.DISCONNECTED && DnsClientEngine.normalize(selectedProfile.engine) == DnsClientEngine.SlowDns)) &&
-                        !serverTestState.isRunning,
+                    contentDescription = if (serverTestState.isRunning) soarText("Stop server test", "توقف تست سرورها") else WhiteDnsL10n.serverTestButton,
+                    enabled = serverTestState.isRunning || (connectionStatus == ConnectionStatus.CONNECTED ||
+                        (connectionStatus == ConnectionStatus.DISCONNECTED && DnsClientEngine.normalize(selectedProfile.engine) == DnsClientEngine.SlowDns)),
                     onClick = { onServerTestClick(null) },
                 ),
                 ProfileMenuAction(
@@ -3762,6 +3762,7 @@ internal fun ConnectionProfilesSettings(
         val canDelete = canManageProfiles && !isActive
         val canTest = (connectionStatus == ConnectionStatus.CONNECTED ||
             (connectionStatus == ConnectionStatus.DISCONNECTED && DnsClientEngine.normalize(profile.engine) == DnsClientEngine.SlowDns)) &&
+            !(profile.id == SuperDnsCatalog.AutoId && connectionStatus != ConnectionStatus.DISCONNECTED) &&
             !serverTestState.isRunning &&
             profile.customServerDomain.isNotBlank() &&
             profile.customServerEncryptionKey.isNotBlank()
@@ -5868,7 +5869,14 @@ private fun ConnectionProfileRow(
                         onClick = onUse,
                     ),
                     ProfileMenuAction(
-                        label = if (DnsClientEngine.normalize(profile.engine) == DnsClientEngine.SlowDns) soarText("Test ping", "تست پینگ") else WhiteDnsL10n.serverTestSingleButton,
+                        label = when {
+                            profile.id == SuperDnsCatalog.AutoId ->
+                                soarText("Scan AM servers", "اسکن سرورهای AM")
+                            SuperDnsCatalog.isZone(ServerDomains.primary(profile.customServerDomain)) ->
+                                soarText("Test HTTPS", "تست HTTPS")
+                            DnsClientEngine.normalize(profile.engine) == DnsClientEngine.SlowDns -> soarText("Test ping", "تست پینگ")
+                            else -> WhiteDnsL10n.serverTestSingleButton
+                        },
                         icon = Icons.Rounded.Speed,
                         contentDescription = WhiteDnsL10n.serverTestSingleButton,
                         enabled = canTest,
@@ -5934,6 +5942,8 @@ private fun ServerTestInlineResult(rating: ServerTestRatingDisplay, result: Serv
         Text(
             modifier = Modifier.weight(1f),
             text = when {
+                result.status == ServerTestStatus.Ready && result.pingMillis != null && SuperDnsCatalog.isZone(ServerDomains.primary(result.domain)) ->
+                    "HTTPS: ${result.pingMillis} ms"
                 result.status == ServerTestStatus.Ready && result.pingMillis != null -> "Ping (SOCKS): ${result.pingMillis} ms"
                 result.status == ServerTestStatus.Failed && result.message.isNotBlank() -> result.message
                 else -> WhiteDnsL10n.serverTestTitle

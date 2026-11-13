@@ -31,7 +31,7 @@ object DnsClientEngine {
     }
 
     fun displayName(value: String): String {
-        return when (normalize(value)) { CottenDns -> "CottenDNS"; Soar -> "Soar"; SlowDns -> "SlowDNS (BD NET)"; else -> "StormDNS" }
+        return when (normalize(value)) { CottenDns -> "CottenDNS"; Soar -> "Soar"; SlowDns -> "SlowDNS / SuperDNS"; else -> "StormDNS" }
     }
 }
 

@@ -27,6 +27,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.net.Inet4Address
 import java.net.NetworkInterface
@@ -36,6 +38,8 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 import shop.whitedns.client.model.AdvancedSettingsProfile
 import shop.whitedns.client.model.AutoTuneTrialResult
+import shop.whitedns.client.storm.SuperDnsCatalog
+import shop.whitedns.client.storm.SuperDnsScanRankStore
 import shop.whitedns.client.model.ConnectionProfile
 import shop.whitedns.client.model.ConnectionProgressState
 import shop.whitedns.client.model.ConnectionStats
@@ -1345,13 +1349,27 @@ class WhiteDnsViewModel(
         val requestedProfile = baseSettings.normalizedConnectionProfiles().firstOrNull { it.id == testProfileId }
         val offlineSlowDns = uiState.connectionStatus == ConnectionStatus.DISCONNECTED &&
             requestedProfile != null && DnsClientEngine.normalize(requestedProfile.engine) == DnsClientEngine.SlowDns
-        if ((uiState.connectionStatus != ConnectionStatus.CONNECTED && !offlineSlowDns) || uiState.serverTestState.isRunning) return
+        if (uiState.serverTestState.isRunning) {
+            serverTestJob?.cancel()
+            return
+        }
+        if (uiState.connectionStatus != ConnectionStatus.CONNECTED && !offlineSlowDns) return
 
         serverTestJob?.cancel()
-        // While disconnected, test one selected SlowDNS profile instead of
-        // launching every saved server concurrently.
-        val serverProfiles = buildServerTestProfiles(baseSettings, if (offlineSlowDns) testProfileId else serverProfileId)
-        val resolverEntries = connectedServerTestResolvers(baseSettings)
+        // The AM Auto profile explicitly scans its 50 individual routes only
+        // when disconnected. At most two workers run at once; no idle rescan.
+        val isAmScan = offlineSlowDns && requestedProfile?.id == SuperDnsCatalog.AutoId
+        val rankStore = SuperDnsScanRankStore(appContext)
+        val scanNetworkKey = if (isAmScan) rankStore.networkKey(baseSettings) else null
+        val serverProfiles = if (isAmScan) {
+            baseSettings.normalizedConnectionProfiles()
+                .filter { it.id != SuperDnsCatalog.AutoId && it.id.startsWith("superdns-am-") && SuperDnsCatalog.isZone(it.customServerDomain) }
+                .mapNotNull(::serverProfileFromConnectionProfile)
+        } else buildServerTestProfiles(baseSettings, if (offlineSlowDns) testProfileId else serverProfileId)
+        val allResolverEntries = connectedServerTestResolvers(baseSettings)
+        // A server scan must not re-scan thousands of resolvers 50 times.
+        // Users can scan other paths by selecting a different resolver profile.
+        val resolverEntries = if (isAmScan) allResolverEntries.take(8) else allResolverEntries
 
         if (serverProfiles.isEmpty()) {
             val message = if (serverProfileId == null) {
@@ -1422,24 +1440,41 @@ class WhiteDnsViewModel(
 
             var failureMessage: String? = null
             try {
-                val startups = plans.map { plan ->
-                    async(Dispatchers.IO) {
-                        startServerTestPlan(
-                            plan = plan,
-                            manager = managers.getValue(plan.serverProfile.id),
-                        )
+                if (isAmScan || plans.size > 4) {
+                    val semaphore = Semaphore(2)
+                    val measured = plans.map { plan ->
+                        async(Dispatchers.IO) {
+                            semaphore.withPermit {
+                                val manager = managers.getValue(plan.serverProfile.id)
+                                try {
+                                    val startup = startServerTestPlan(plan, manager)
+                                    if (startup.ready) measureServerTestPlan(startup) else null
+                                } finally {
+                                    manager.stop()
+                                }
+                            }
+                        }
+                    }.awaitAll().filterNotNull()
+                    if (isAmScan) {
+                        val ordered = measured.filter { it.status == ServerTestStatus.Ready && it.pingMillis != null }
+                            .sortedBy { it.pingMillis }.map { it.domain }
+                        val saved = rankStore.save(baseSettings, scanNetworkKey, ordered)
+                        appendLog(if (saved) "AM SuperDNS scan: ${ordered.size} verified; Auto uses HTTPS latency hints for this network for up to 2 hours" else "AM SuperDNS scan: ${ordered.size} verified; rankings not saved (network changed or no server passed)")
                     }
-                }.awaitAll()
-                val readyStartups = startups.filter { it.ready }
-                if (readyStartups.isNotEmpty()) {
-                    delay(AutoTuneMeasurementSettleMillis)
+                } else {
+                    val startups = plans.map { plan ->
+                        async(Dispatchers.IO) {
+                            startServerTestPlan(plan = plan, manager = managers.getValue(plan.serverProfile.id))
+                        }
+                    }.awaitAll()
+                    val readyStartups = startups.filter { it.ready }
+                    if (readyStartups.isNotEmpty()) delay(AutoTuneMeasurementSettleMillis)
+                    readyStartups.map { startup ->
+                        async(Dispatchers.IO) { measureServerTestPlan(startup) }
+                    }.awaitAll()
                 }
-                readyStartups.map { startup ->
-                    async(Dispatchers.IO) {
-                        measureServerTestPlan(startup)
-                    }
-                }.awaitAll()
             } catch (error: CancellationException) {
+                failureMessage = "Server Test stopped"
                 throw error
             } catch (error: Exception) {
                 failureMessage = error.message ?: error::class.java.simpleName
@@ -1553,15 +1588,20 @@ class WhiteDnsViewModel(
             )
         }
         val slowDns = DnsClientEngine.normalize(plan.serverProfile.engine) == DnsClientEngine.SlowDns
+        val isAm = SuperDnsCatalog.isZone(ServerDomains.primary(plan.serverProfile.domain))
         val probeResult = if (slowDns) null else WhiteDnsTrafficWarmup.measureDownloadThroughput(plan.settings.resolve())
         val speed = probeResult?.bytesPerSecond ?: 0L
-        val pingMillis = if (slowDns) WhiteDnsTrafficWarmup.measureSocksConnectLatency(plan.settings.resolve()) else probeResult?.latencyMillis
+        val pingMillis = when {
+            isAm -> WhiteDnsTrafficWarmup.measureSocksHttpsLatency(plan.settings.resolve())
+            slowDns -> WhiteDnsTrafficWarmup.measureSocksConnectLatency(plan.settings.resolve())
+            else -> probeResult?.latencyMillis
+        }
         val measured = pingMillis != null || probeResult != null
         val result = plan.result.copy(
             status = if (measured) ServerTestStatus.Ready else ServerTestStatus.Failed,
             speedBytesPerSecond = speed,
             pingMillis = pingMillis,
-            message = if (measured) "Measured (SOCKS connect latency)" else "No response through tunnel",
+            message = if (!measured) "No response through tunnel" else if (isAm) "Measured (HTTPS response latency)" else "Measured (SOCKS connect latency)",
         )
         withContext(Dispatchers.Main.immediate) {
             updateServerTestResultOnMain(result)
